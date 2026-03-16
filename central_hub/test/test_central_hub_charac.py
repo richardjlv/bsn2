@@ -644,3 +644,177 @@ class TestCentralHubBehavior:
         if hasattr(self.central_hub.publisher_manager, 'publish_system_data'):
             # Use empty dictionaries for the data arguments
             self.central_hub.publisher_manager.publish_system_data(50.0, {}, {}, {})
+
+
+@pytest.mark.usefixtures("central_hub_node")
+class TestG4T1MigrationCoverage:
+    """Explicit G4T1 migration coverage tests for CentralHub."""
+
+    central_hub = None
+    publishers = {}
+    received_messages = []
+
+    def setup_method(self):
+        qos_profile = QoSProfile(
+            reliability=QoSReliabilityPolicy.RELIABLE,
+            history=QoSHistoryPolicy.KEEP_LAST,
+            depth=10,
+        )
+
+        for sensor_type in [
+            "thermometer",
+            "ecg",
+            "oximeter",
+            "abps",
+            "abpd",
+            "glucosemeter",
+        ]:
+            self.publishers[sensor_type] = self.central_hub.create_publisher(
+                SensorData, f"sensor_data/{sensor_type}", qos_profile
+            )
+
+        time.sleep(0.2)
+        self.received_messages.clear()
+
+    def _risk_to_pct(self, risk_level):
+        mapping = {
+            "high": 80.0,
+            "moderate": 50.0,
+            "low": 10.0,
+            "normal": 10.0,
+        }
+        return mapping.get(risk_level, -1.0)
+
+    def _publish_sensor_data(self, sensor_type, value, risk_level="normal", risk_percentage=None):
+        msg = SensorData()
+        header = Header()
+        header.stamp = self.central_hub.get_clock().now().to_msg()
+        header.frame_id = sensor_type
+        msg.header = header
+        msg.sensor_type = sensor_type
+        msg.sensor_datapoint = float(value)
+        msg.risk_level = risk_level
+        msg.risk = float(risk_percentage if risk_percentage is not None else self._risk_to_pct(risk_level))
+
+        self.publishers[sensor_type].publish(msg)
+        for _ in range(5):
+            rclpy.spin_once(self.central_hub, timeout_sec=0.1)
+            time.sleep(0.05)
+
+    def _publish_all_sensors(self, risk_percentage, datapoint=1.0, risk_level="normal"):
+        self._publish_sensor_data("thermometer", 37.0 + datapoint, risk_level, risk_percentage)
+        self._publish_sensor_data("ecg", 90.0 + datapoint, risk_level, risk_percentage)
+        self._publish_sensor_data("oximeter", 98.0, risk_level, risk_percentage)
+        self._publish_sensor_data("abps", 110.0 + datapoint, risk_level, risk_percentage)
+        self._publish_sensor_data("abpd", 75.0 + datapoint, risk_level, risk_percentage)
+        self._publish_sensor_data("glucosemeter", 80.0 + datapoint, risk_level, risk_percentage)
+
+    def _run_detect_and_get_message(self):
+        self.central_hub.detect()
+        time.sleep(0.4)
+        for _ in range(10):
+            rclpy.spin_once(self.central_hub, timeout_sec=0.1)
+        assert len(self.received_messages) > 0, "No TargetSystemData message was received"
+        return self.received_messages[-1]
+
+    def test_collect_thermometer_data(self):
+        self._publish_sensor_data("thermometer", 37.2, "normal", 10.0)
+        assert self.central_hub.sensor_handler.latest_data["thermometer"] == 37.2
+
+    def test_transfer_very_low_risk_patient(self):
+        self._publish_all_sensors(risk_percentage=0.0, risk_level="normal")
+        message = self._run_detect_and_get_message()
+        assert message.patient_status <= 20.0
+
+    def test_transfer_low_risk_patient(self):
+        self._publish_all_sensors(risk_percentage=30.0, risk_level="low")
+        message = self._run_detect_and_get_message()
+        assert 20.0 < message.patient_status <= 40.0
+
+    def test_transfer_moderate_risk_patient(self):
+        self._publish_all_sensors(risk_percentage=50.0, risk_level="moderate")
+        message = self._run_detect_and_get_message()
+        assert 40.0 < message.patient_status <= 60.0
+
+    def test_transfer_critical_risk_patient(self):
+        self._publish_all_sensors(risk_percentage=70.0, risk_level="high")
+        message = self._run_detect_and_get_message()
+        assert 55.0 < message.patient_status <= 80.0
+
+    def test_transfer_very_critical_risk_patient(self):
+        self._publish_all_sensors(risk_percentage=95.0, risk_level="high")
+        message = self._run_detect_and_get_message()
+        assert message.patient_status >= 75.0
+
+    def test_transfer_mixed_risk_levels(self):
+        self._publish_sensor_data("thermometer", 37.0, "low", 20.0)
+        self._publish_sensor_data("ecg", 130.0, "high", 80.0)
+        self._publish_sensor_data("oximeter", 92.0, "moderate", 50.0)
+        self._publish_sensor_data("abps", 150.0, "high", 80.0)
+        self._publish_sensor_data("abpd", 90.0, "moderate", 50.0)
+        self._publish_sensor_data("glucosemeter", 160.0, "high", 80.0)
+        message = self._run_detect_and_get_message()
+        assert 40.0 <= message.patient_status <= 95.0
+
+    def test_transfer_all_sensor_data_fields(self):
+        sensor_payloads = {
+            "thermometer": (36.9, "normal", 10.0),
+            "ecg": (88.0, "normal", 10.0),
+            "oximeter": (97.0, "normal", 10.0),
+            "abps": (112.0, "normal", 10.0),
+            "abpd": (74.0, "normal", 10.0),
+            "glucosemeter": (82.0, "normal", 10.0),
+        }
+
+        for sensor, (value, label, pct) in sensor_payloads.items():
+            self._publish_sensor_data(sensor, value, label, pct)
+
+        message = self._run_detect_and_get_message()
+        assert isinstance(message.patient_status, float)
+
+        latest_data = self.central_hub.sensor_handler.latest_data
+        latest_risk = self.central_hub.sensor_handler.latest_risk
+        latest_labels = self.central_hub.sensor_handler.latest_risks_labels
+
+        for sensor, (value, label, pct) in sensor_payloads.items():
+            assert sensor in latest_data
+            assert abs(latest_data[sensor] - value) < 1e-6
+            assert sensor in latest_risk
+            assert abs(latest_risk[sensor] - pct) < 1e-6
+            assert sensor in latest_labels
+            assert latest_labels[sensor] == label
+
+    def test_collect_zero_risk_data(self):
+        self._publish_all_sensors(risk_percentage=0.0, risk_level="normal")
+        for sensor in ["thermometer", "ecg", "oximeter", "abps", "abpd", "glucosemeter"]:
+            assert self.central_hub.sensor_handler.latest_risk[sensor] == 0.0
+
+    def test_collect_maximum_risk_data(self):
+        self._publish_all_sensors(risk_percentage=100.0, risk_level="high")
+        for sensor in ["thermometer", "ecg", "oximeter", "abps", "abpd", "glucosemeter"]:
+            assert self.central_hub.sensor_handler.latest_risk[sensor] == 100.0
+
+    def test_collect_low_battery_data(self):
+        if not hasattr(self.central_hub, "battery_manager"):
+            pytest.skip("Battery manager not available")
+
+        original_level = self.central_hub.battery_manager.battery.current_level
+        try:
+            self.central_hub.battery_manager.battery.current_level = 5.0
+            self._publish_sensor_data("thermometer", 38.0, "moderate", 50.0)
+            assert self.central_hub.sensor_handler.latest_data["thermometer"] == 38.0
+            self.central_hub.battery_manager.check_battery_status()
+            assert self.central_hub.battery_manager.battery.current_level <= 5.0 or self.central_hub.battery_manager.is_recharging
+        finally:
+            self.central_hub.battery_manager.battery.current_level = original_level
+
+    def test_sequential_sensor_updates(self):
+        self._publish_sensor_data("thermometer", 36.1, "normal", 10.0)
+        assert self.central_hub.sensor_handler.latest_data["thermometer"] == 36.1
+
+        self._publish_sensor_data("thermometer", 36.8, "normal", 10.0)
+        assert self.central_hub.sensor_handler.latest_data["thermometer"] == 36.8
+
+        self._publish_sensor_data("thermometer", 37.4, "moderate", 50.0)
+        assert self.central_hub.sensor_handler.latest_data["thermometer"] == 37.4
+        assert self.central_hub.sensor_handler.latest_risk["thermometer"] == 50.0

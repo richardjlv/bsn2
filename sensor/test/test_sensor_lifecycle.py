@@ -4,6 +4,8 @@ import rclpy
 from bsn_interfaces.msg import SensorData
 from rclpy.node import Node
 import threading
+from contextlib import suppress
+from rclpy.executors import ExternalShutdownException
 
 @pytest.fixture(scope="module")
 def ros_context():
@@ -74,7 +76,11 @@ def lifecycle_sensor(ros_context):
     executor.add_node(node)
 
     # Start executor in a separate thread
-    executor_thread = threading.Thread(target=executor.spin, daemon=True)
+    def spin_executor():
+        with suppress(ExternalShutdownException, RuntimeError):
+            executor.spin()
+
+    executor_thread = threading.Thread(target=spin_executor, daemon=True)
     executor_thread.start()
     
     # Configure the node and wait a bit

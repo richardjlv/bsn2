@@ -3,6 +3,7 @@ import yaml
 import os
 import time
 import threading
+from contextlib import suppress
 from ament_index_python.packages import get_package_share_directory
 from rclpy.parameter import Parameter
 from bsn_interfaces.msg import SensorData
@@ -10,6 +11,7 @@ from bsn_interfaces.srv import PatientData
 import rclpy
 from sensor.sensor import Sensor
 from rclpy.node import Node
+from rclpy.executors import ExternalShutdownException
 
 
 @pytest.fixture(scope="class")
@@ -35,7 +37,11 @@ def sensor_node(request):
     executor.add_node(mock_service_node)
 
     # Start executor in a separate thread
-    executor_thread = threading.Thread(target=executor.spin, daemon=True)
+    def spin_executor():
+        with suppress(ExternalShutdownException, RuntimeError):
+            executor.spin()
+
+    executor_thread = threading.Thread(target=spin_executor, daemon=True)
     executor_thread.start()
 
     # Load params from YAML file - we'll use thermometer for testing
