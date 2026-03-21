@@ -256,7 +256,7 @@ def test_transfer_with_low_risk_data(sensor_fixture):
     msg = o.wait_for_message(1, timeout=2.0)
     assert msg is not None, "Expected a SensorData message for low risk"
     assert msg.sensor_datapoint == pytest.approx(datapoint)
-    assert msg.risk < 21.0
+    assert msg.risk < 20.0
 
 
 @pytest.mark.parametrize("sensor_fixture", SENSOR_CONFIGS, indirect=True)
@@ -270,7 +270,7 @@ def test_transfer_with_high_risk_data(sensor_fixture):
     msg = o.wait_for_message(1, timeout=2.0)
     assert msg is not None, "Expected a SensorData message for high risk"
     assert msg.sensor_datapoint == pytest.approx(datapoint)
-    assert msg.risk > 65.0
+    assert msg.risk > 66.0
 
 
 @pytest.mark.parametrize("sensor_fixture", SENSOR_CONFIGS, indirect=True)
@@ -284,8 +284,8 @@ def test_transfer_with_mid_risk_data(sensor_fixture):
     msg = o.wait_for_message(1, timeout=2.0)
     assert msg is not None, "Expected a SensorData message for mid risk"
     assert msg.sensor_datapoint == pytest.approx(datapoint)
-    # Boundary values may land exactly on the low/mid threshold in the current ROS2 evaluator
-    assert 20.0 <= msg.risk < 66.0
+    assert msg.risk > 20.0
+    assert msg.risk < 66.0
 
 
 @pytest.mark.parametrize("sensor_fixture", SENSOR_CONFIGS, indirect=True)

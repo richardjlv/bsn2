@@ -678,9 +678,9 @@ class TestG4T1MigrationCoverage:
 
     def _risk_to_pct(self, risk_level):
         mapping = {
-            "high": 80.0,
-            "moderate": 50.0,
-            "low": 10.0,
+            "high": 85.0,
+            "moderate": 55.0,
+            "low": 35.0,
             "normal": 10.0,
         }
         return mapping.get(risk_level, -1.0)
@@ -722,37 +722,37 @@ class TestG4T1MigrationCoverage:
         assert self.central_hub.sensor_handler.latest_data["thermometer"] == 37.2
 
     def test_transfer_very_low_risk_patient(self):
-        self._publish_all_sensors(risk_percentage=0.0, risk_level="normal")
+        self._publish_all_sensors(risk_percentage=10.0, risk_level="normal")
         message = self._run_detect_and_get_message()
         assert message.patient_status <= 20.0
 
     def test_transfer_low_risk_patient(self):
-        self._publish_all_sensors(risk_percentage=30.0, risk_level="low")
+        self._publish_all_sensors(risk_percentage=35.0, risk_level="low")
         message = self._run_detect_and_get_message()
         assert 20.0 < message.patient_status <= 40.0
 
     def test_transfer_moderate_risk_patient(self):
-        self._publish_all_sensors(risk_percentage=50.0, risk_level="moderate")
+        self._publish_all_sensors(risk_percentage=55.0, risk_level="moderate")
         message = self._run_detect_and_get_message()
         assert 40.0 < message.patient_status <= 60.0
 
     def test_transfer_critical_risk_patient(self):
-        self._publish_all_sensors(risk_percentage=70.0, risk_level="high")
+        self._publish_all_sensors(risk_percentage=85.0, risk_level="high")
         message = self._run_detect_and_get_message()
-        assert 55.0 < message.patient_status <= 80.0
+        assert 60.0 < message.patient_status <= 80.0
 
     def test_transfer_very_critical_risk_patient(self):
-        self._publish_all_sensors(risk_percentage=95.0, risk_level="high")
+        self._publish_all_sensors(risk_percentage=100.0, risk_level="high")
         message = self._run_detect_and_get_message()
-        assert message.patient_status >= 75.0
+        assert message.patient_status > 80.0
 
     def test_transfer_mixed_risk_levels(self):
-        self._publish_sensor_data("thermometer", 37.0, "low", 20.0)
-        self._publish_sensor_data("ecg", 130.0, "high", 80.0)
-        self._publish_sensor_data("oximeter", 92.0, "moderate", 50.0)
-        self._publish_sensor_data("abps", 150.0, "high", 80.0)
-        self._publish_sensor_data("abpd", 90.0, "moderate", 50.0)
-        self._publish_sensor_data("glucosemeter", 160.0, "high", 80.0)
+        self._publish_sensor_data("thermometer", 36.8, "normal", 10.0)
+        self._publish_sensor_data("ecg", 110.0, "moderate", 50.0)
+        self._publish_sensor_data("oximeter", 88.0, "high", 80.0)
+        self._publish_sensor_data("abps", 115.0, "low", 15.0)
+        self._publish_sensor_data("abpd", 95.0, "moderate", 45.0)
+        self._publish_sensor_data("glucosemeter", 120.0, "low", 30.0)
         message = self._run_detect_and_get_message()
         assert 40.0 <= message.patient_status <= 95.0
 
