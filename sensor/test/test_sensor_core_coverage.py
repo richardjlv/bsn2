@@ -72,12 +72,16 @@ def sensor_node(ros_context):
         pass
 
 
-def test_is_active_reflects_internal_state(sensor_node):
-    sensor_node.active = False
-    assert sensor_node.is_active() is False
-
-    sensor_node.active = True
-    assert sensor_node.is_active() is True
+@pytest.mark.parametrize(
+    "active_state, expected",
+    [
+        (False, False),
+        (True, True),
+    ],
+)
+def test_is_active_reflects_internal_state(sensor_node, active_state, expected):
+    sensor_node.active = active_state
+    assert sensor_node.is_active() is expected
 
 
 def test_on_configure_error_path(sensor_node, monkeypatch):
@@ -88,13 +92,33 @@ def test_on_configure_error_path(sensor_node, monkeypatch):
     assert result.name == "ERROR"
 
 
-def test_on_activate_creates_timer_and_resets_existing_timer(sensor_node):
-    sensor_node.trigger_configure()
 
+@pytest.mark.parametrize(
+    "field_name, expected, check_mode",
+    [
+        ("result_name", "SUCCESS", "equals"),
+        ("active", True, "equals"),
+        ("_heartbeat_timer", None, "not_none"),
+    ],
+)
+def test_on_activate_state_and_result(sensor_node, field_name, expected, check_mode):
+    sensor_node.trigger_configure()
     result = sensor_node.on_activate(SimpleNamespace())
-    assert result.name == "SUCCESS"
-    assert sensor_node.active is True
-    assert sensor_node._heartbeat_timer is not None
+
+    if field_name == "result_name":
+        actual = result.name
+    else:
+        actual = getattr(sensor_node, field_name)
+
+    if check_mode == "equals":
+        assert actual == expected
+    else:
+        assert actual is not None
+
+
+def test_on_activate_second_call_resets_timer(sensor_node):
+    sensor_node.trigger_configure()
+    sensor_node.on_activate(SimpleNamespace())
 
     timer = sensor_node._heartbeat_timer
     timer_info = {"reset_called": False}
@@ -106,8 +130,7 @@ def test_on_activate_creates_timer_and_resets_existing_timer(sensor_node):
 
     timer.reset = wrapped_reset
     try:
-        result = sensor_node.on_activate(SimpleNamespace())
-        assert result.name == "SUCCESS"
+        sensor_node.on_activate(SimpleNamespace())
         assert timer_info["reset_called"] is True
     finally:
         timer.reset = original_reset
@@ -161,19 +184,31 @@ def test_on_shutdown_failure_path(sensor_node, monkeypatch):
     assert result.name == "FAILURE"
 
 
-def test_on_shutdown_success_marks_node_finalized(sensor_node):
+
+@pytest.mark.parametrize(
+    "field_name, expected",
+    [
+        ("result_name", "SUCCESS"),
+        ("active", False),
+        ("_finalized", True),
+        ("_heartbeat_timer", None),
+    ],
+)
+def test_on_shutdown_state_and_result(sensor_node, field_name, expected):
     sensor_node.trigger_configure()
     sensor_node.trigger_activate()
-
     result = sensor_node.on_shutdown(SimpleNamespace())
 
-    assert result.name == "SUCCESS"
-    assert sensor_node.active is False
-    assert sensor_node._finalized is True
-    assert sensor_node._heartbeat_timer is None
+    if field_name == "result_name":
+        actual = result.name
+    else:
+        actual = getattr(sensor_node, field_name)
+
+    assert actual == expected
 
 
-def test_spin_sensor_processes_active_sensor_path(sensor_node, monkeypatch):
+
+def test_spin_sensor_starts_auto_management(sensor_node, monkeypatch):
     calls = []
 
     class FakeRate:
@@ -194,6 +229,28 @@ def test_spin_sensor_processes_active_sensor_path(sensor_node, monkeypatch):
     sensor_node.spin_sensor()
 
     assert "start_auto_management" in calls
+
+
+def test_spin_sensor_performs_transfer_with_processed_value(sensor_node, monkeypatch):
+    calls = []
+
+    class FakeRate:
+        def sleep(self):
+            sensor_node._finalized = True
+
+    monkeypatch.setattr(sensor_node, "create_rate", lambda *_: FakeRate())
+    monkeypatch.setattr(sensor_node.lifecycle_manager, "start_auto_management", lambda: calls.append("start_auto_management"))
+    sensor_node.active = True
+    sensor_node._finalized = False
+    sensor_node.battery_manager.is_recharging = False
+    monkeypatch.setattr(sensor_node.processor, "collect", lambda: 37.0)
+    monkeypatch.setattr(sensor_node.processor, "process", lambda value: value + 1.0)
+    monkeypatch.setattr(sensor_node.processor, "transfer", lambda value: calls.append(("transfer", value)))
+
+    monkeypatch.setattr(rclpy, "ok", lambda: True)
+
+    sensor_node.spin_sensor()
+
     assert ("transfer", 38.0) in calls
 
 
@@ -256,7 +313,7 @@ def test_spin_sensor_exits_immediately_when_finalized(sensor_node, monkeypatch):
     assert any("exiting spin loop" in message for message in info_messages)
 
 
-def test_main_initializes_spins_and_shuts_down(monkeypatch):
+def _run_main_and_collect_events(monkeypatch):
     import sensor.sensor as sensor_module
 
     events = []
@@ -287,10 +344,21 @@ def test_main_initializes_spins_and_shuts_down(monkeypatch):
     monkeypatch.setattr(sensor_module.threading, "Thread", FakeThread)
 
     sensor_module.main(args=["--ros-args"])
+    return events
 
-    assert ("rclpy.init", ["--ros-args"]) in events
-    assert ("init_sensor", "sensor_node") in events
-    assert "thread_started" in events
-    assert "spin_sensor" in events
-    assert "destroy_node" in events
-    assert "rclpy.shutdown" in events
+
+@pytest.mark.parametrize(
+    "expected_event",
+    [
+        ("rclpy.init", ["--ros-args"]),
+        ("init_sensor", "sensor_node"),
+        "thread_started",
+        "spin_sensor",
+        "destroy_node",
+        "rclpy.shutdown",
+    ],
+)
+def test_main_flow_events(monkeypatch, expected_event):
+    events = _run_main_and_collect_events(monkeypatch)
+
+    assert expected_event in events

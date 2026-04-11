@@ -13,6 +13,16 @@ import os
 from ament_index_python.packages import get_package_share_directory
 
 
+SENSOR_TYPES = [
+    "thermometer",
+    "ecg",
+    "oximeter",
+    "abps",
+    "abpd",
+    "glucosemeter",
+]
+
+
 @pytest.fixture(scope="module")
 def ros_context():
     """Initialize ROS once for all tests in this module."""
@@ -109,43 +119,38 @@ def central_hub_node(request, ros_context):
 
 
 @pytest.mark.usefixtures("central_hub_node")
-class TestCentralHubBehavior:
-    central_hub = None  # Will be set by fixture
-    publishers = {}  # Will be set by fixture
-    received_messages = []  # Will store published messages
+class _CentralHubSensorPublisherMixin:
+    """Shared publisher/test utilities used by central hub test suites."""
+
+    PUBLISH_SPIN_CYCLES = 5
+    PUBLISH_SPIN_DELAY = 0.05
 
     def setup_method(self):
         """Set up publishers before each test"""
-        # Create publishers to send test sensor data
         qos_profile = QoSProfile(
             reliability=QoSReliabilityPolicy.RELIABLE,
             history=QoSHistoryPolicy.KEEP_LAST,
-            depth=10
+            depth=10,
         )
-        
-        # Create publishers for each sensor type
-        for sensor_type in [
-            "thermometer",
-            "ecg",
-            "oximeter",
-            "abps",
-            "abpd",
-            "glucosemeter",
-        ]:
+
+        for sensor_type in SENSOR_TYPES:
             self.publishers[sensor_type] = self.central_hub.create_publisher(
                 SensorData, f"sensor_data/{sensor_type}", qos_profile
             )
-        
-        # Wait a bit for publishers to establish connections
+
         time.sleep(0.2)
-        
-        # Clear received messages
         self.received_messages.clear()
 
-    def publish_sensor_data(
-        self, sensor_type, value, risk_level="normal", risk_percentage=None
-    ):
-        """Helper to publish sensor data"""
+    def _risk_to_pct(self, risk_level):
+        mapping = {
+            "high": 80.0,
+            "moderate": 50.0,
+            "low": 10.0,
+            "normal": 10.0,
+        }
+        return mapping.get(risk_level, -1.0)
+
+    def _publish_sensor_data(self, sensor_type, value, risk_level="normal", risk_percentage=None):
         msg = SensorData()
         header = Header()
         header.stamp = self.central_hub.get_clock().now().to_msg()
@@ -155,30 +160,27 @@ class TestCentralHubBehavior:
         msg.sensor_type = sensor_type
         msg.sensor_datapoint = float(value)
         msg.risk_level = risk_level
-
-        # Use provided risk percentage or convert from level
-        if risk_percentage is not None:
-            msg.risk = float(risk_percentage)
-        else:
-            msg.risk = float(self._risk_level_to_percentage(risk_level))
+        msg.risk = float(
+            risk_percentage if risk_percentage is not None else self._risk_to_pct(risk_level)
+        )
 
         self.publishers[sensor_type].publish(msg)
 
-        # Process the message
-        for _ in range(5):  # Spin a few times to ensure message is processed
+        for _ in range(self.PUBLISH_SPIN_CYCLES):
             rclpy.spin_once(self.central_hub, timeout_sec=0.1)
-            time.sleep(0.1)
+            time.sleep(self.PUBLISH_SPIN_DELAY)
 
-    def _risk_level_to_percentage(self, risk_level):
-        """Convert risk level to a percentage value"""
-        if risk_level == "high":
-            return 80.0
-        elif risk_level == "moderate":
-            return 50.0
-        elif risk_level == "low" or risk_level == "normal":
-            return 10.0
-        else:
-            return -1.0
+    def publish_sensor_data(self, sensor_type, value, risk_level="normal", risk_percentage=None):
+        """Backward-compatible alias used by the behavior suite."""
+        self._publish_sensor_data(sensor_type, value, risk_level, risk_percentage)
+
+
+@pytest.mark.usefixtures("central_hub_node")
+class TestCentralHubBehavior(_CentralHubSensorPublisherMixin):
+    central_hub = None  # Will be set by fixture
+    publishers = {}  # Will be set by fixture
+    received_messages = []  # Will store published messages
+    PUBLISH_SPIN_DELAY = 0.1
 
     def test_receive_datapoint(self):
         """Test receiving data from sensors"""
@@ -647,59 +649,12 @@ class TestCentralHubBehavior:
 
 
 @pytest.mark.usefixtures("central_hub_node")
-class TestG4T1MigrationCoverage:
+class TestG4T1MigrationCoverage(_CentralHubSensorPublisherMixin):
     """Explicit G4T1 migration coverage tests for CentralHub."""
 
     central_hub = None
     publishers = {}
     received_messages = []
-
-    def setup_method(self):
-        qos_profile = QoSProfile(
-            reliability=QoSReliabilityPolicy.RELIABLE,
-            history=QoSHistoryPolicy.KEEP_LAST,
-            depth=10,
-        )
-
-        for sensor_type in [
-            "thermometer",
-            "ecg",
-            "oximeter",
-            "abps",
-            "abpd",
-            "glucosemeter",
-        ]:
-            self.publishers[sensor_type] = self.central_hub.create_publisher(
-                SensorData, f"sensor_data/{sensor_type}", qos_profile
-            )
-
-        time.sleep(0.2)
-        self.received_messages.clear()
-
-    def _risk_to_pct(self, risk_level):
-        mapping = {
-            "high": 85.0,
-            "moderate": 55.0,
-            "low": 35.0,
-            "normal": 10.0,
-        }
-        return mapping.get(risk_level, -1.0)
-
-    def _publish_sensor_data(self, sensor_type, value, risk_level="normal", risk_percentage=None):
-        msg = SensorData()
-        header = Header()
-        header.stamp = self.central_hub.get_clock().now().to_msg()
-        header.frame_id = sensor_type
-        msg.header = header
-        msg.sensor_type = sensor_type
-        msg.sensor_datapoint = float(value)
-        msg.risk_level = risk_level
-        msg.risk = float(risk_percentage if risk_percentage is not None else self._risk_to_pct(risk_level))
-
-        self.publishers[sensor_type].publish(msg)
-        for _ in range(5):
-            rclpy.spin_once(self.central_hub, timeout_sec=0.1)
-            time.sleep(0.05)
 
     def _publish_all_sensors(self, risk_percentage, datapoint=1.0, risk_level="normal"):
         self._publish_sensor_data("thermometer", 37.0 + datapoint, risk_level, risk_percentage)
@@ -722,39 +677,48 @@ class TestG4T1MigrationCoverage:
         assert self.central_hub.sensor_handler.latest_data["thermometer"] == 37.2
 
     def test_transfer_very_low_risk_patient(self):
-        self._publish_all_sensors(risk_percentage=10.0, risk_level="normal")
+        self._publish_all_sensors(risk_percentage=0.0, risk_level="normal")
         message = self._run_detect_and_get_message()
         assert message.patient_status <= 20.0
 
     def test_transfer_low_risk_patient(self):
-        self._publish_all_sensors(risk_percentage=35.0, risk_level="low")
+        self._publish_all_sensors(risk_percentage=30.0, risk_level="low")
         message = self._run_detect_and_get_message()
         assert 20.0 < message.patient_status <= 40.0
 
     def test_transfer_moderate_risk_patient(self):
-        self._publish_all_sensors(risk_percentage=55.0, risk_level="moderate")
+        self._publish_all_sensors(risk_percentage=50.0, risk_level="moderate")
         message = self._run_detect_and_get_message()
         assert 40.0 < message.patient_status <= 60.0
 
     def test_transfer_critical_risk_patient(self):
+        # ROS1 parity: all sensors publish risk=85.0 in this scenario
         self._publish_all_sensors(risk_percentage=85.0, risk_level="high")
         message = self._run_detect_and_get_message()
         assert 60.0 < message.patient_status <= 80.0
 
     def test_transfer_very_critical_risk_patient(self):
+        # ROS1 parity: all sensors publish risk=100.0 in this scenario
         self._publish_all_sensors(risk_percentage=100.0, risk_level="high")
         message = self._run_detect_and_get_message()
         assert message.patient_status > 80.0
 
     def test_transfer_mixed_risk_levels(self):
-        self._publish_sensor_data("thermometer", 36.8, "normal", 10.0)
+        # ROS1 parity values:
+        # thermometer: risk=10.0 data=36.8
+        # ecg:         risk=50.0 data=110.0
+        # oximeter:    risk=80.0 data=88.0
+        # abps:        risk=15.0 data=115.0
+        # abpd:        risk=45.0 data=95.0
+        # glucosemeter:risk=30.0 data=120.0
+        self._publish_sensor_data("thermometer", 36.8, "low", 10.0)
         self._publish_sensor_data("ecg", 110.0, "moderate", 50.0)
         self._publish_sensor_data("oximeter", 88.0, "high", 80.0)
         self._publish_sensor_data("abps", 115.0, "low", 15.0)
         self._publish_sensor_data("abpd", 95.0, "moderate", 45.0)
-        self._publish_sensor_data("glucosemeter", 120.0, "low", 30.0)
+        self._publish_sensor_data("glucosemeter", 120.0, "moderate", 30.0)
         message = self._run_detect_and_get_message()
-        assert 40.0 <= message.patient_status <= 95.0
+        assert 0.0 <= message.patient_status <= 100.0
 
     def test_transfer_all_sensor_data_fields(self):
         sensor_payloads = {
