@@ -782,3 +782,11 @@ class TestG4T1MigrationCoverage(_CentralHubSensorPublisherMixin):
         self._publish_sensor_data("thermometer", 37.4, "moderate", 50.0)
         assert self.central_hub.sensor_handler.latest_data["thermometer"] == 37.4
         assert self.central_hub.sensor_handler.latest_risk["thermometer"] == 50.0
+
+    def test_uncertainty_like_influence_on_collection(self):
+        """Simulate an uncertainty-influenced datapoint arriving at central hub collection."""
+        # Publish a perturbed oximeter datapoint and assert central hub records it
+        self._publish_sensor_data("oximeter", 85.5, "normal", 15.0)
+        # allow processing
+        time.sleep(0.2)
+        assert abs(self.central_hub.sensor_handler.latest_data["oximeter"] - 85.5) < 1e-6
