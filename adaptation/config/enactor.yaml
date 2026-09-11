@@ -1,0 +1,4 @@
+enactor:
+  ros__parameters:
+    frequency: 1.0
+    debug: false

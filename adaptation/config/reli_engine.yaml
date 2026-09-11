@@ -1,0 +1,16 @@
+reliability_engine:
+  ros__parameters:
+    # Core parameters
+    qos_attribute: "reliability"
+    info_quant: 5
+    monitor_freq: 1.0
+    actuation_freq: 0.5
+    
+    # Control parameters
+    setpoint: 0.95
+    offset: 0.05
+    gain: 0.2
+    tolerance: 0.02
+    
+    # Formula parameters
+    formula_refresh_seconds: 60.0

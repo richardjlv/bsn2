@@ -1,73 +1,95 @@
-from bsn_interfaces.msg import Event, Status, TargetSystemData
-from std_msgs.msg import Header
+"""
+Publisher management for central hub node.
 
-class PublisherManager:
-    """Manages all publishers for the central hub"""
+This module manages all ROS publishers for the central hub including
+system data publishing, status updates, events, and heartbeat messages
+for the Body Sensor Network emergency detection system.
+"""
+
+from bsn_interfaces.msg import TargetSystemData
+from std_msgs.msg import Header
+from shared_components.enums import StatusContent, Task
+from shared_components.core.publisher_manager_base import PublisherManagerBase
+
+
+class PublisherManager(PublisherManagerBase):
+    """
+    Manages all publishers for the central hub.
+    
+    This class centralizes all publishing operations for the central hub,
+    including target system data, component status, system events, and
+    heartbeat messages. It handles message formatting and ensures proper
+    header information for system communication.
+    
+    Attributes:
+        node: Reference to the parent central hub node.
+        status_pub: Publisher for component status messages.
+        event_pub: Publisher for system events.
+        target_system_publisher: Publisher for target system data.
+        
+    Examples:
+        ```python
+        pub_mgr = PublisherManager(central_hub_node)
+        pub_mgr.setup_publishers()
+        
+        # Publish system data
+        pub_mgr.publish_system_data(75.2, sensor_data, risk_data, battery_levels)
+        
+        # Publish status update
+        pub_mgr.publish_status("activated", "processing")
+        ```
+    """
     
     def __init__(self, node):
-        self.node = node
-        self.status_pub = None
+        """
+        Initialize publisher manager for central hub.
         
+        Creates early publishers for events and prepares for additional
+        publishers to be set up during configuration phase.
+        
+        Args:
+            node: The parent central hub node instance.
+        """
+        super().__init__(node)
         # Create event publisher early
-        self.event_pub = node.create_publisher(
-            Event, 'collect_event', 10
-        )
-        
-        # Target system data publisher will be created on configure
         self.target_system_publisher = None
     
-    def setup_publishers(self):
-        """Set up publishers during configure transition"""
-        self.status_pub = self.node.create_publisher(
-            Status, 'component_status', 10
-        )
+    def setup_exclusive_publishers(self) -> bool:
+        """
+        Set up publishers during configure transition.
         
-        self.target_system_publisher = self.node.create_publisher(
-            TargetSystemData, "target_system_data", 10
-        )
-    
-    def publish_status(self, content, task):
-        """Publish component status"""
-        if self.status_pub is None:
-            return
-            
-        msg = Status()
-        msg.source = self.node.get_name()
-        msg.target = "system"
-        msg.content = content
-        msg.task = task
-        self.status_pub.publish(msg)
-        self.node.get_logger().debug(f"Status published: {content}, task: {task}")
-    
-    def publish_event(self, event_type):
-        """Publish an event"""
-        msg = Event()
-        msg.source = self.node.get_name()
-        msg.target = "system"
-        msg.content = event_type
-        msg.freq = self.node.config.frequency
-        self.event_pub.publish(msg)
-        self.node.get_logger().info(f"Event published: {event_type}")
-    
-    def publish_heartbeat(self):
-        """Publish periodic heartbeat"""
-        msg = Event()
-        msg.source = self.node.get_name()
-        msg.target = "system"
-        msg.freq = float(self.node.config.frequency)
-
-        # Check for recharge mode
-        if self.node.battery_manager.is_recharging:
-            msg.content = "recharging"
-        else:
-            msg.content = "activate" if self.node.active else "deactivate"
-
-        self.event_pub.publish(msg)
-        self.node.get_logger().debug(f"Heartbeat published: {msg.content}")
+        Creates the remaining publishers that require hub-specific
+        configuration information including status and target system
+        data publishers.
+        """
+        try:
+            # Create status publisher
+            self.target_system_publisher = self.node.create_publisher(
+                TargetSystemData, "target_system_data", 10
+            )
+            return True
+        except Exception as e:
+            self.node.get_logger().error(f"Failed to create exclusive publishers: {e}")
+            return False
     
     def publish_system_data(self, patient_status, latest_data, latest_risk, sensor_battery_levels):
-        """Publish data to target system"""
-        if self.target_system_publisher is None:
+        """
+        Publish comprehensive system data for emergency detection.
+        
+        Publishes integrated sensor data, risk assessments, and system status
+        to external monitoring systems. This is the primary output of the
+        emergency detection system containing all relevant patient monitoring
+        information.
+        
+        Args:
+            patient_status (float): Overall patient risk percentage (0-100).
+            latest_data (dict): Latest sensor readings from all sensors.
+            latest_risk (dict): Latest risk percentages from all sensors.
+            sensor_battery_levels (dict): Current battery levels of all sensors.
+        """
+        if self.target_system_publisher is None or not self.node.active:
+            self.node.get_logger().debug("Target system publisher not available or node inactive, skipping publish")
+            self.publish_status(StatusContent.FAIL, Task.TRANSFER)
             return
             
         # Use small battery for transmission

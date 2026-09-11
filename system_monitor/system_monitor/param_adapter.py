@@ -1,4 +1,11 @@
-#!/usr/bin/env python3
+"""
+Parameter adaptation routing for Body Sensor Network components.
+
+This module provides component registration and adaptation command routing
+capabilities for the BSN system. It manages dynamic registration of system
+components and routes adaptation commands to appropriate targets.
+"""
+
 import rclpy
 from rclpy.node import Node
 from bsn_interfaces.msg import AdaptationCommand
@@ -6,17 +13,58 @@ from bsn_interfaces.srv import EffectorRegister
 import threading
 import time
 
+
 class ParamAdapter(Node):
     """
-    Parameter Adaptation routing component for BSN system in ROS2
+    Parameter adaptation routing component for BSN system.
     
-    Key functions:
-    - Receives component registrations via service
-    - Receives adaptation commands from enactor
-    - Routes commands to target components
+    This class manages component registration and routes adaptation commands
+    to appropriate system components. It provides a centralized adaptation
+    infrastructure that allows components to register themselves and receive
+    targeted configuration changes during runtime.
+    
+    The adapter maintains a registry of active components and creates dedicated
+    communication channels for each registered component to ensure reliable
+    adaptation command delivery.
+    
+    Attributes:
+        registered_components (dict): Registry of active components with timestamps.
+        _component_publishers (dict): Publishers for component-specific topics.
+        check_interval (float): Interval for checking component staleness.
+        debug (bool): Whether debug logging is enabled.
+        register_service: ROS service for component registration.
+        command_sub: Subscriber for incoming adaptation commands.
+        
+    Examples:
+        Basic usage:
+        ```python
+        import rclpy
+        from system_monitor.param_adapter import ParamAdapter
+        
+        rclpy.init()
+        adapter = ParamAdapter()
+        rclpy.spin(adapter)
+        ```
+        
+        Component registration via service:
+        ```python
+        # From a component
+        client = node.create_client(EffectorRegister, 'EffectorRegister')
+        request = EffectorRegister.Request()
+        request.name = "my_component"
+        request.connection = True
+        response = client.call(request)
+        ```
     """
 
     def __init__(self):
+        """
+        Initialize the parameter adapter.
+        
+        Sets up component registration service, adaptation command subscription,
+        and periodic component checking. Configures adapter parameters for
+        staleness detection.
+        """
         super().__init__('param_adapter')
         self.get_logger().info("Starting ParamAdapter")
         
@@ -24,17 +72,42 @@ class ParamAdapter(Node):
         self.registered_components = {}
         self._component_publishers = {}  # Changed variable name to avoid property conflict
         
+        # BSN to ROS2 node name mapping (including central hub)
+        self.bsn_to_ros_mapping = {
+            # Sensor components
+            '/g3t1_1': '/oximeter_node',
+            '/g3t1_2': '/ecg_node', 
+            '/g3t1_3': '/thermometer_node',
+            '/g3t1_4': '/abps_node',
+            '/g3t1_5': '/abpd_node',
+            '/g3t1_6': '/glucosemeter_node',
+            '/g4t1': '/central_hub_node',
+
+        }
+        
+        # Create publishers for actual ROS2 node names
+        self.expected_components = [
+            'thermometer_node', 'oximeter_node', 'ecg_node',
+            'abps_node', 'abpd_node', 'glucosemeter_node',
+            'central_hub_node'
+        ]
+        
+        for component in self.expected_components:
+            topic_name = f'reconfigure_{component}'
+            self._component_publishers[f'/{component}'] = self.create_publisher(
+                AdaptationCommand, topic_name, 10
+            )
+
         # Configure adapter parameters
         self.declare_parameter('check_interval', 10.0)  # Interval to check for stale components
-        self.declare_parameter('debug_level', False)    # Enable debug logging
+
         
         # Get parameters
         self.check_interval = self.get_parameter('check_interval').value
-        self.debug = self.get_parameter('debug_level').value
         
         # Service for components to register themselves
         self.register_service = self.create_service(
-            EffectorRegister, 
+            EffectorRegister,
             'EffectorRegister', 
             self.module_connect
         )
@@ -53,7 +126,23 @@ class ParamAdapter(Node):
         self.get_logger().info("ParamAdapter initialized and ready to register components")
     
     def module_connect(self, request, response):
-        """Handle component registration and deregistration"""
+        """
+        Handle component registration and deregistration requests.
+        
+        Processes service requests from components wanting to register or
+        deregister from the adaptation system. Creates dedicated publishers
+        for registered components and maintains registration timestamps.
+        
+        Args:
+            request (EffectorRegister.Request): Service request containing
+                component name and connection flag (True=register, False=deregister).
+            response (EffectorRegister.Response): Service response to populate
+                with acknowledgment status.
+                
+        Returns:
+            EffectorRegister.Response: Response with ack field set to True
+                for successful operations, False for errors.
+        """
         try:
             component_name = request.name
             
@@ -102,24 +191,23 @@ class ParamAdapter(Node):
         return response
 
     def receive_adaptation_command(self, msg):
-        """Process adaptation command and route to target component"""
-        target = msg.target
+        """Process and route adaptation commands with name translation"""
         
-        if target in self._component_publishers:  # Updated variable name
-            # Forward command to component's specific topic
-            self._component_publishers[target].publish(msg)  # Updated variable name
+        # Translate BSN component name to ROS2 node name
+        original_target = msg.target
+        translated_target = self.bsn_to_ros_mapping.get(original_target, original_target)
+        
+        if translated_target in self._component_publishers:
+            # Update message target to actual ROS2 node name
+            msg.target = translated_target
             
-            # Update tracking
-            if target in self.registered_components:
-                self.registered_components[target]['last_command'] = {
-                    'timestamp': time.time(),
-                    'action': msg.action
-                }
+            # Forward to actual component
+            self._component_publishers[translated_target].publish(msg)
             
-            if self.debug:
-                self.get_logger().debug(f"Command routed to {target}: {msg.action}")
+            self.get_logger().info(f"Routed adaptation: {original_target} → {translated_target}")
+            self.get_logger().info(f"Command content: {msg.action}")
         else:
-            self.get_logger().warn(f"Received command for unknown component: {target}")
+            self.get_logger().warn(f"Unknown target after translation: {translated_target}")
             
             # Check if target has a similar name (might be naming inconsistency)
             for component in self.registered_components:
@@ -127,7 +215,14 @@ class ParamAdapter(Node):
                     self.get_logger().warn(f"Did you mean '{component}' instead of '{target}'?")
 
     def check_components(self):
-        """Check for components that haven't been active for a while"""
+        """
+        Check for components that haven't been active recently.
+        
+        Periodically reviews registered components to identify those that
+        haven't shown activity for extended periods. Logs stale components
+        for system monitoring purposes but doesn't automatically remove them
+        as they might still be functional.
+        """
         current_time = time.time()
         stale_threshold = 300.0  # Consider component stale after 5 minutes
         
@@ -141,15 +236,24 @@ class ParamAdapter(Node):
                 stale_components.append(component)
                 
         # Log stale components (but don't remove - they might still be active)
-        if stale_components and self.debug:
-            self.get_logger().info(f"These components were registered >5 minutes ago: {stale_components}")
+        
+            self.get_logger().debug(f"These components were registered >5 minutes ago: {stale_components}")
             
         # Log active components summary
-        if self.debug:
-            self.get_logger().info(f"Active components: {list(self.registered_components.keys())}")
+        self.get_logger().debug(f"Active components: {list(self.registered_components.keys())}")
 
 
 def main(args=None):
+    """
+    Main entry point for the parameter adapter node.
+    
+    Initializes ROS, creates the parameter adapter, and runs it in a
+    multi-threaded executor to handle service requests and command
+    routing concurrently.
+    
+    Args:
+        args: Command line arguments passed to ROS initialization.
+    """
     rclpy.init(args=args)
     node = ParamAdapter()
     

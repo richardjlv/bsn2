@@ -1,0 +1,13 @@
+data_access:
+  ros__parameters:
+    # Core operation parameters
+    frequency: 1.0                   # Calculation frequency (Hz)
+    buffer_size: 1000                # Maximum entries per component in memory
+    flush_frequency: 30              # Number of messages before flushing to disk
+    
+    # Calculation formulas - REMOVE THESE (they're not used in the code)
+    # reliability_formula: "successes/(successes+failures)"
+    # cost_formula: "battery_consumption"
+    
+    # Timing parameters
+    time_window_seconds: 10.0        # Time window for reliability calculation (seconds)

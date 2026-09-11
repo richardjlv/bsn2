@@ -1,66 +1,85 @@
-from rclpy.lifecycle import LifecycleNode, State, TransitionCallbackReturn
+from rclpy.lifecycle import State, TransitionCallbackReturn
 import rclpy
 import threading
-import time
 
 # Import component managers
-from central_hub.components.battery_manager import BatteryManager
 from central_hub.components.config_manager import ConfigManager
 from central_hub.components.data_fusion import DataFusionEngine
 from central_hub.components.publishers import PublisherManager
 from central_hub.components.sensor_data_handler import SensorDataHandler
-#from central_hub.components.lifecycle_manager import LifecycleManager
 from central_hub.utils.visualization import Visualizer
 from central_hub.utils.risk_analyzer import RiskAnalyzer
-from shared_components.lifecycle_manager import LifecycleManager  # Add this import
-from shared_components.adaptation_handler import AdaptationHandler
+from shared_components.enums import StatusContent, Task, EventType
+from shared_components.core.ros_component import RosComponent
 
-class CentralHub(LifecycleNode):
+class CentralHub(RosComponent):
     """
     Central Hub for the Body Sensor Network.
     
     This class coordinates different components to monitor patient health.
     """
     
-    def __init__(self):
-        super().__init__("central_hub")
+    def __init__(self, node_name: str, parameters=None):
+
+        super().__init__(node_name, parameters)
         
-        # Configuration manager (loads and manages parameters)
-        self.config = ConfigManager(self)
-        
-        # Component managers
-        self.battery_manager = BatteryManager(self)
-        self.publisher_manager = PublisherManager(self)
-        self.sensor_handler = SensorDataHandler(self)
-        self.fusion_engine = DataFusionEngine(self)
-        self.risk_analyzer = RiskAnalyzer(self)
-        self.visualizer = Visualizer(self)
-        
-        # Add lifecycle manager
-        self.lifecycle_manager = LifecycleManager(self)
-        
-        self.adaptation_handler = AdaptationHandler(self)
-        if self.config.activate_adaptation: 
-            self.adaptation_handler.register_with_effector()
-        # Node state
-        self.active = False
-        self._finalized = False
-        self._heartbeat_timer = None
-        
-        # Configure lifecycle management
         self.lifecycle_manager.set_auto_management_flags(
             auto_configure=True,
             auto_activate=True,
             battery_aware=True,
-            auto_recovery=True
+            auto_recovery=False
         )
-        
-        # Set battery thresholds for lifecycle decisions
         self.lifecycle_manager.configure_thresholds(
-            battery_low=2.0,  # Lower for hub
+            battery_low=2.0,
             battery_recovery=15.0
         )
 
+    
+
+    
+    def _create_config_manager(self):
+        """Factory method: return central-hub-specific ConfigManager."""
+        return ConfigManager(self)
+    
+    def _create_publisher_manager(self):
+        """Factory method: return central-hub-specific PublisherManager."""
+        return PublisherManager(self)
+    
+    def _create_additional_managers(self):
+        """Create central-hub-specific managers."""
+        self.sensor_handler = SensorDataHandler(self)
+        self.fusion_engine = DataFusionEngine(self)
+        self.risk_analyzer = RiskAnalyzer(self)
+        self.visualizer = Visualizer(self)
+    
+    
+    def run(self):
+        """
+        Main central hub loop implementation (required by RosComponent).
+        
+        Continuously monitors sensors and processes health data.
+        """
+        rate = self.create_rate(self.config.frequency)
+
+        try:
+            while rclpy.ok():
+                if self._finalized:
+                    break
+                    
+                # Run detection if active and not in recharge mode
+                if self.is_active() and not self.battery_manager.is_recharging:
+                    self.detect()
+                else:
+                    # Handle recharging while inactive or in recharge mode
+                    self.battery_manager.recharge()
+                    self.get_logger().debug(
+                        f"Hub in {'recharging' if self.battery_manager.is_recharging else 'inactive'} state, "
+                        f"battery: {self.battery_manager.battery.current_level:.1f}%"
+                    )
+                rate.sleep()
+        except KeyboardInterrupt:
+            pass
+    
     def on_configure(self, state: State) -> TransitionCallbackReturn:
         """Callback when transitioning to Configured state."""
         self.get_logger().info("Configuring Central Hub...")
@@ -73,11 +92,12 @@ class CentralHub(LifecycleNode):
             self.sensor_handler.setup_subscriptions()
             
             # Publish configured status
-            self.publisher_manager.publish_status("configured", "idle")
+            self.publisher_manager.publish_status(StatusContent.SUCCESS, Task.CONFIGURE)
             
             return TransitionCallbackReturn.SUCCESS
         except Exception as e:
             self.get_logger().error(f"Error during configuration: {e}")
+            self.publisher_manager.publish_status(StatusContent.FAIL, Task.CONFIGURE)
             return TransitionCallbackReturn.ERROR
 
     def on_activate(self, state: State) -> TransitionCallbackReturn:
@@ -94,11 +114,12 @@ class CentralHub(LifecycleNode):
                 self._heartbeat_timer.reset()
                 
             # Publish activation event immediately
-            self.publisher_manager.publish_event("activate")
-            self.publisher_manager.publish_status("activated", "idle")
+            self.publisher_manager.publish_event(EventType.ACTIVATE)
+            self.publisher_manager.publish_status(StatusContent.SUCCESS, Task.ACTIVATE)
             
             return TransitionCallbackReturn.SUCCESS
         except Exception as e:
+            self.publisher_manager.publish_status(StatusContent.FAIL, Task.ACTIVATE)
             self.get_logger().error(f"Error during activation: {e}")
             return TransitionCallbackReturn.ERROR
 
@@ -110,14 +131,15 @@ class CentralHub(LifecycleNode):
             
             # Keep heartbeat timer running, but change content to "deactivate"
             # DO NOT cancel the timer
-            
+            self.get_logger().warn(f"activation state is {self.active}")
             # Publish deactivation events
-            self.publisher_manager.publish_event("deactivate")
-            self.publisher_manager.publish_status("deactivated", "idle")
-            
+            self.publisher_manager.publish_event(EventType.DEACTIVATE)
+            self.publisher_manager.publish_status(StatusContent.SUCCESS, Task.DEACTIVATE)
+
             return TransitionCallbackReturn.SUCCESS
         except Exception as e:
             self.get_logger().error(f"Error during deactivation: {e}")
+            self.publisher_manager.publish_status(StatusContent.FAIL, Task.DEACTIVATE)
             return TransitionCallbackReturn.ERROR
 
     def on_cleanup(self, state: State) -> TransitionCallbackReturn:
@@ -126,8 +148,6 @@ class CentralHub(LifecycleNode):
         try:
             # Clean up subscriptions
             self.sensor_handler.cleanup_subscriptions()
-            
-            self.publisher_manager.publish_status("unconfigured", "idle")
             return TransitionCallbackReturn.SUCCESS
         except Exception as e:
             self.get_logger().error(f"Error during cleanup: {e}")
@@ -151,7 +171,8 @@ class CentralHub(LifecycleNode):
             return TransitionCallbackReturn.FAILURE
 
     def is_active(self):
-        """Check if hub is active"""
+        """Check if hub is active using lifecycle state"""
+        self.get_logger().warn(f"Checking if hub is active: {self.active}")
         return self.active
 
     def detect(self):
@@ -174,13 +195,14 @@ class CentralHub(LifecycleNode):
             # Emit alerts for high/moderate risks
             self.risk_analyzer.emit_alert(patient_status)
             
-            # Publish system data
-            self.publisher_manager.publish_system_data(
-                patient_status, 
-                self.sensor_handler.latest_data,
-                self.sensor_handler.latest_risk,
-                self.sensor_handler.sensor_battery_levels
-            )
+            if self.active:
+                # Publish system data
+                self.publisher_manager.publish_system_data(
+                    patient_status, 
+                    self.sensor_handler.latest_data,
+                    self.sensor_handler.latest_risk,
+                    self.sensor_handler.sensor_battery_levels
+                )
             
             # Report energy status
             self.battery_manager.send_energy_status()
@@ -192,7 +214,7 @@ class CentralHub(LifecycleNode):
 def main(args=None):
     rclpy.init(args=args)
 
-    hub = CentralHub()
+    hub = CentralHub(node_name="central_hub_node")
     
     # Start automatic lifecycle management
     hub.lifecycle_manager.start_auto_management()
@@ -202,25 +224,9 @@ def main(args=None):
         target=rclpy.spin, args=(hub,), daemon=True
     )
     thread.start()
-    rate = hub.create_rate(hub.config.frequency)
 
     try:
-        while rclpy.ok():
-            if hub._finalized:
-                break
-                
-            # Run detection if active and not in recharge mode
-            if hub.is_active() and not hub.battery_manager.is_recharging:
-                hub.detect()
-            else:
-                # Let battery manager handle recharging
-                hub.get_logger().debug(
-                    f"Hub in {'recharging' if hub.battery_manager.is_recharging else 'inactive'} state, "
-                    f"battery: {hub.battery_manager.battery.current_level:.1f}%"
-                )
-            rate.sleep()
-    except KeyboardInterrupt:
-        pass
+        hub.run()  # Call the public run method
     finally:
         hub.destroy_node()
         rclpy.shutdown()

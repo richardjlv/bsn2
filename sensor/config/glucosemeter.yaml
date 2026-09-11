@@ -1,6 +1,6 @@
 glucosemeter_node:
   ros__parameters:
-    sensor: "glucosemeter"
+    component: "glucosemeter"
     vital_sign: "glucose"
     frequency: "1.0"
     
@@ -21,3 +21,4 @@ glucosemeter_node:
     battery_level: 100.0
     battery_unit: 0.05
     instant_recharge: false
+    enable_adaptation: true

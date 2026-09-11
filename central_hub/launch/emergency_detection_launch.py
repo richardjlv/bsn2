@@ -33,6 +33,26 @@ def generate_launch_description():
         'config',
         'monitor_config.yaml'
     )
+    config_enactor = os.path.join(
+        get_package_share_directory('adaptation'),
+        'config',
+        'enactor.yaml'
+    )
+    config_data_access = os.path.join(
+        get_package_share_directory('adaptation'),
+        'config',
+        'data_access.yaml'
+    )
+    config_reli_engine = os.path.join(
+        get_package_share_directory('adaptation'),
+        'config',
+        'reli_engine.yaml'
+    )
+    config_central = os.path.join(
+        get_package_share_directory('central_hub'),
+        'config',
+        'central_hub.yaml'
+    )
 
     return launch.LaunchDescription(
         [
@@ -43,6 +63,7 @@ def generate_launch_description():
                 emulate_tty=True,
                 output="screen",
                 parameters=[config_patient],
+                on_exit=launch.actions.Shutdown()
             ),
             launch_ros.actions.Node(
                 package="sensor",
@@ -98,10 +119,11 @@ def generate_launch_description():
                 name="central_hub_node",
                 emulate_tty=True,
                 output="screen",
+                parameters=[config_central],
             ),
             launch_ros.actions.Node(
                 package='system_monitor',
-                executable='system_monitor',
+                executable='logger',
                 name='logger',
                 output='screen',
                 emulate_tty=True,
@@ -114,6 +136,38 @@ def generate_launch_description():
                 output='screen',
                 emulate_tty=True,
                 parameters=[config_monitor]
+            ),
+            launch_ros.actions.Node(
+                package='system_monitor',
+                executable='param_adapter',
+                name='param_adapter',
+                output='screen',
+                emulate_tty=True,
+                parameters=[config_monitor]
+            ),
+            # launch_ros.actions.Node(
+                # package='adaptation',
+                # executable='enactor',
+                # name='enactor',
+                # output='screen',
+                # emulate_tty=True,
+                #parameters=[config_enactor]
+            # ),
+            launch_ros.actions.Node(
+                package='adaptation',
+                executable='data_access',
+                name='data_access',
+                output='screen',
+                emulate_tty=True,
+                #parameters=[config_data_access] if os.path.exists(config_data_access) else [],
+            ),
+            launch_ros.actions.Node(
+                package='adaptation',
+                executable='reli_engine',
+                name='reli_engine',
+                output='screen',
+                emulate_tty=True,
+                parameters=[config_reli_engine] if os.path.exists(config_reli_engine) else [],
             ),
         ]
     )
