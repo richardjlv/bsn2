@@ -1,0 +1,33 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+  <name>bsn_bdd</name>
+  <version>0.0.0</version>
+  <description>
+    The BDD suite, living in features/ rather than inside any one package
+    because its scenarios exercise central_hub, sensor, patient and
+    system_monitor together. The .feature specs sit at the root, their
+    pytest-bdd step definitions in steps/, and test/ holds launch_testing
+    harnesses that bring up a per-feature ROS2 stack (see
+    central_hub/launch/*.py) and run steps/test_*.py against it, so
+    `colcon test` can run the suite without a manual `ros2 launch` +
+    `pytest` first.
+  </description>
+  <maintainer email="gabrielbfranca@gmail.com">DockerUser</maintainer>
+  <license>TODO: License declaration</license>
+
+  <test_depend>launch</test_depend>
+  <test_depend>launch_ros</test_depend>
+  <test_depend>launch_testing</test_depend>
+  <test_depend>launch_testing_ros</test_depend>
+  <test_depend>ament_index_python</test_depend>
+  <test_depend>central_hub</test_depend>
+  <test_depend>ament_copyright</test_depend>
+  <test_depend>ament_flake8</test_depend>
+  <test_depend>ament_pep257</test_depend>
+  <test_depend>python3-pytest</test_depend>
+
+  <export>
+    <build_type>ament_python</build_type>
+  </export>
+</package>

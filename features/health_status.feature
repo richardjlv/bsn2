@@ -1,14 +1,24 @@
-Feature: Patient Health Status (BSN-P10) - Whether the bodyhub has processed some data, it eventually will detect a new patient health status.
+Feature: Patient Health Status (BSN-P10)
 
-	@reduced_system
-	Scenario: Successful Health Status (Happy Path)
-		Given that nodes thermometer and central hub are online
-		When I listen to thermometer
-		Then g4t1 will detect new patient health status
+	A patient health status is available whenever a sensor reports a reading,
+	and stops being produced while the central hub is unable to process
+	incoming readings.
 
-	@reduced_system
-	Scenario: Failure to Detect Health Status (Sad Path)
-		Given that nodes thermometer and central hub are online
-		When I listen to thermometer
-		But an internal processing error occurs in g4t1
-		Then Central hub will fail to detect the new patient health status
+	@behavior @bsn-p10
+	Scenario: A patient health status is available after a sensor reports a reading (BSN-P10)
+		Given the patient is being monitored by the thermometer
+		When the thermometer reports a new vital sign reading
+		Then a patient health status derived from that reading should be available
+
+	# D-healthstatus-01: worded differently from the happy-path When on purpose.
+	# With the hub unable to process readings, /target_system_data never
+	# publishes, so this step needs a bounded wait instead of the shared
+	# "{sensor} reports a new vital sign reading" step (which blocks until a
+	# fixed line count arrives - see pytest_steps/test_check_bsn.py's "the ECG
+	# sensor and the thermometer report new vital sign readings" for the same
+	# reasoning).
+	@behavior @sad-path @bsn-p10
+	Scenario: No patient health status is produced when the central hub cannot process a reading (BSN-P10)
+		Given the central hub is unable to process incoming readings
+		When the thermometer reports a reading
+		Then no new patient health status should be produced for that reading
