@@ -99,11 +99,27 @@ class Engine(Node, ABC):
             request.name = "/engine"
             request.query = f"{name}_formula"
 
+            # Both waits are bounded on purpose. setup() calls this from a
+            # `while not formula_str` retry loop before the executor is
+            # spinning, so an unbounded wait here hangs the whole node
+            # before it ever creates its `strategy` publisher: a request
+            # sent before DDS finishes matching the DataAccess service is
+            # simply dropped, and its future then never completes.
+            if not self.data_access_client.wait_for_service(timeout_sec=5.0):
+                self.get_logger().warn(
+                    "DataAccessRequest service not available yet; will retry."
+                )
+                return ""
+
             future = self.data_access_client.call_async(request)
-            rclpy.spin_until_future_complete(self, future)
+            rclpy.spin_until_future_complete(self, future, timeout_sec=5.0)
 
             if future.result():
-                formula_str = future.result()
+                # DataAccessRequest's response is a message with a single
+                # `string content` field, not the string itself - reading the
+                # response object here made every downstream str operation
+                # (.strip/.split) fail against DataAccessRequest_Response.
+                formula_str = future.result().content
                 if not formula_str:
                     self.get_logger().error("ERROR: Empty formula string received.")
                 return formula_str
@@ -188,7 +204,15 @@ class Engine(Node, ABC):
 
     def body(self):
         """Main execution loop"""
-        rate = self.create_rate(self.monitor_freq)
+        # Plain sleep rather than `self.create_rate(...).sleep()`: main() runs
+        # this loop on the only thread there is, and an rclpy Rate is driven by
+        # a timer that fires only while some executor spins the node. With
+        # nothing spinning it in parallel, the first rate.sleep() blocks
+        # forever - the loop logged "Starting engine body loop...", ran one
+        # monitor pass, and then never iterated again, so no strategy was
+        # ever published. The loop already pumps callbacks itself via
+        # spin_once below.
+        period = 1.0 / self.monitor_freq if self.monitor_freq else 1.0
         update_counter = 0
 
         self.get_logger().info("Starting engine body loop...")
@@ -210,7 +234,7 @@ class Engine(Node, ABC):
                 # Spin once to handle callbacks
                 rclpy.spin_once(self, timeout_sec=0.01)
 
-                rate.sleep()
+                time.sleep(period)
 
         except KeyboardInterrupt:
             self.get_logger().info("Engine body loop interrupted")

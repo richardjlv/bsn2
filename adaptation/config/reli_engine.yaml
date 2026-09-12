@@ -1,16 +1,20 @@
-reliability_engine:
+reli_engine:
   ros__parameters:
+    # Matches ROS1's configurations/system_manager/strategy_manager.launch -
+    # the production launch bsn_full.launch actually includes, not
+    # test_strategy_manager.launch (which only differs on actuation_freq,
+    # 0.2 there vs this file's 0.02, for a faster test cycle).
     # Core parameters
     qos_attribute: "reliability"
-    info_quant: 5
+    info_quant: 5.0
     monitor_freq: 1.0
-    actuation_freq: 0.5
-    
+    actuation_freq: 0.02
+
     # Control parameters
-    setpoint: 0.95
-    offset: 0.05
-    gain: 0.2
+    setpoint: 0.9
+    offset: 0.5
+    gain: 0.01
     tolerance: 0.02
-    
+
     # Formula parameters
     formula_refresh_seconds: 60.0

@@ -1,7 +1,12 @@
 central_hub_node:
   ros__parameters:
     component: 'central_hub'
-    frequency: '2.0'
+    # Matches ROS1's configurations/target_system/g4t1.launch
+    # (<param name="frequency" value="6" />), the production launch
+    # bsn_full.launch actually includes - not the package's own 2.0 Hz
+    # code default. See central_hub/launch/emergency_detection_adaptation_
+    # launch.py's per-launch override for BSN-P03's own note on this gap.
+    frequency: '6.0'
     
     battery_id: 'hub_battery'
     battery_capacity: 500.0  

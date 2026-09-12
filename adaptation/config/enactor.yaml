@@ -2,3 +2,12 @@ enactor:
   ros__parameters:
     frequency: 1.0
     debug: false
+    # Matches ROS1's strategy_enactor.launch (<param name="kp" value="150" />).
+    # Never set here before, so Controller silently fell back to its Python
+    # default of 0.5 - a 300x smaller proportional gain. With the formula's
+    # error terms typically well under 1.0, that made new_freq = freq +
+    # (kp/100)*error move by hundredths of a Hz per cycle: technically
+    # convergent, but far too slow to visibly cross a 2-decimal freq= value
+    # within any reasonable test or operational window. Confirmed live:
+    # restoring 150 turns a multi-minute crawl into single-cycle jumps.
+    kp: 150.0

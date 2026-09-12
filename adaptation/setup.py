@@ -12,6 +12,9 @@ setup(
             ['resource/' + package_name]),
         ('share/' + package_name, ['package.xml']),
         (os.path.join("share", package_name, "config"), glob("config/*.yaml")),
+        # Reliability/cost formulas and the goal model DataAccess reads at
+        # runtime - see data_access.py's models_path.
+        (os.path.join("share", package_name, "resource", "model"), glob("resource/model/*")),
     ],
     install_requires=['setuptools'],
     zip_safe=True,

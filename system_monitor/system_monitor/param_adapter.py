@@ -193,10 +193,15 @@ class ParamAdapter(Node):
     def receive_adaptation_command(self, msg):
         """Process and route adaptation commands with name translation"""
         
-        # Translate BSN component name to ROS2 node name
+        # Translate BSN component name to ROS2 node name. Both the mapping
+        # and _component_publishers are keyed with a leading slash, while a
+        # component identifying itself by `node.get_name()` has none, so
+        # normalize before looking up - otherwise a perfectly valid
+        # "oximeter_node" misses both tables and falls into the branch below.
         original_target = msg.target
-        translated_target = self.bsn_to_ros_mapping.get(original_target, original_target)
-        
+        lookup_target = original_target if original_target.startswith("/") else f"/{original_target}"
+        translated_target = self.bsn_to_ros_mapping.get(lookup_target, lookup_target)
+
         if translated_target in self._component_publishers:
             # Update message target to actual ROS2 node name
             msg.target = translated_target
@@ -208,11 +213,15 @@ class ParamAdapter(Node):
             self.get_logger().info(f"Command content: {msg.action}")
         else:
             self.get_logger().warn(f"Unknown target after translation: {translated_target}")
-            
-            # Check if target has a similar name (might be naming inconsistency)
+
+            # Check if target has a similar name (might be naming inconsistency).
+            # `target` was never defined here: the NameError escaped the
+            # subscription callback and unwound this node's spin thread, so a
+            # single unroutable command permanently stopped ALL reconfiguration
+            # routing for the rest of the process's life.
             for component in self.registered_components:
-                if target.lower() in component.lower() or component.lower() in target.lower():
-                    self.get_logger().warn(f"Did you mean '{component}' instead of '{target}'?")
+                if translated_target.lower() in component.lower() or component.lower() in translated_target.lower():
+                    self.get_logger().warn(f"Did you mean '{component}' instead of '{translated_target}'?")
 
     def check_components(self):
         """

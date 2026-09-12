@@ -7,6 +7,7 @@ Knowledge repository for storing and analyzing system data
 """
 
 import rclpy
+from ament_index_python.packages import get_package_share_directory
 from rclpy.node import Node
 from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy, DurabilityPolicy
 import threading
@@ -139,7 +140,15 @@ class DataAccess(Node):
         self.buffer_size = self.get_parameter("buffer_size").value
         self.time_window = self.get_parameter("time_window").value
         self.log_path = "src/adaptation/resource/log"
-        self.models_path = "src/adaptation/resource/model"
+        # Resolved from the installed package share, not from the process
+        # working directory: "src/adaptation/resource/model" only ever existed
+        # relative to a workspace root that does not match this layout (the
+        # package lives at src/bsn_ros2/adaptation), so every formula and goal
+        # model lookup silently missed. setup.py installs resource/model/ for
+        # this to find.
+        self.models_path = os.path.join(
+            get_package_share_directory("adaptation"), "resource", "model"
+        )
         self.flush_interval = self.get_parameter("flush_interval").value
 
         # Initialize data structures
@@ -233,9 +242,13 @@ class DataAccess(Node):
             Persist, "persist", self.receive_persist_message, qos_profile
         )
 
+        # Topic name, not the message class name - central_hub's publisher
+        # (central_hub/components/publishers.py) advertises on
+        # "target_system_data"; ROS2 topic names are case-sensitive and
+        # literal, so the two never matched while this said "TargetSystemData".
         self.target_system_sub = self.create_subscription(
             TargetSystemData,
-            "TargetSystemData",
+            "target_system_data",
             self.process_target_system_data,
             qos_profile,
         )
@@ -767,7 +780,7 @@ def main(args=None):
     rclpy.init(args=args)
 
     try:
-        data_access = DataAccess()
+        data_access = DataAccess(node_name="data_access")
 
         # Use MultiThreadedExecutor for handling multiple callbacks
         executor = rclpy.executors.MultiThreadedExecutor()

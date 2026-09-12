@@ -6,7 +6,7 @@ import time
 from bsn_interfaces.msg import Event, Strategy, AdaptationCommand, Exception as ExceptionMsg
 from collections import deque, defaultdict
 import math
-from .enactor import Enactor
+from .enactor import Enactor, bsn_component_name
 class Controller(Enactor):
     """
     Concrete implementation of Enactor
@@ -38,10 +38,25 @@ class Controller(Enactor):
     
     def receive_event(self, msg):
         """Process lifecycle events from components"""
-        component = msg.source
+        # Events carry the ROS2 node name; every other per-component dict
+        # here is keyed by BSN identifier - see bsn_component_name.
+        component = bsn_component_name(msg.source)
         content = msg.content
         
         if content == "activate":
+            # "activate" doubles as a liveliness heartbeat in this port -
+            # components re-publish it continuously and node_monitor relays
+            # every one (see node_monitor.event_callback's docstring), so a
+            # component emits hundreds of them. Only initialize a component
+            # that is not being tracked yet: re-initializing on every
+            # heartbeat resets freq/r_curr/r_ref to their defaults several
+            # times a second, which silently discards everything the control
+            # loop has accumulated and pins the commanded frequency at its
+            # starting value. A genuine re-activation still initializes,
+            # because "deactivate" pops these keys below.
+            if component in self.freq:
+                return
+
             # Initialize component data structures
             self.invocations[component] = deque(maxlen=100)
             self.exception_buffer[component] = 0
@@ -175,15 +190,26 @@ class Controller(Enactor):
             self.invocations[component].clear()
     
     def _send_adaptation_command(self, component, action):
-        """Send adaptation command to component via reconfigure topic"""
+        """Send adaptation command to component via reconfigure topic, and a
+        separate audit copy via log_adapt (see enactor.setup's log_adapt_pub
+        docstring for why this is a second publish, not a relay).
+
+        Both copies carry the same BSN-form target (e.g. "/g3t1_1") -
+        matching ROS1's Controller.cpp/Logger.cpp, where log_adapt's
+        AdaptationCommand *is* the one Logger relays onward unchanged, so
+        the persisted target and the delivered target were always the same
+        value. param_adapter.bsn_to_ros_mapping translates this form to the
+        real ROS2 node name on the delivery path; /persist keeps the BSN
+        form other adaptation records use (data_access.component_mapping is
+        keyed the same way for status/event lookups)."""
         command = AdaptationCommand()
         command.source = self.get_name()
         command.target = component
         command.action = action
-        
-       
+
         self.adapt.publish(command)
-        
+        self.log_adapt_pub.publish(command)
+
         self.get_logger().info(f"Sent adaptation to {component}: {action}")
     
     def _publish_exception(self, component, value):

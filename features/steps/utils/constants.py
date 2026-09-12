@@ -25,7 +25,7 @@ PERSISTANCE_TOPICS = [
         '/collect_energy_status',
         '/persist',
         '/log_energy_status',
-        '/TargetSystemData'
+        '/target_system_data'  # topic name, not the message class - see utils/interface_map.py's TARGET_SYSTEM_TOPIC
     ]
 SENSOR_TOPICS = [
         '/thermometer_data',
@@ -39,5 +39,5 @@ NON_SENSOR_TOPICS = [
         '/collect_energy_status',
         '/persist',
         '/log_energy_status',
-        '/TargetSystemData'
+        '/target_system_data'  # see utils/interface_map.py's TARGET_SYSTEM_TOPIC
 ]

@@ -14,6 +14,40 @@ from bsn_interfaces.srv import DataAccessRequest, EngineRequest
 from std_msgs.msg import Header
 
 
+# ROS2 node name -> BSN component identifier. The rest of the adaptation
+# subsystem speaks the BSN key space end to end: DataAccess reports
+# reliability per "/g3t1_1" (data_access.process_query), ReliabilityEngine
+# emits strategies for those same names (reli_engine.execute), and
+# Controller.apply_reli_strategy already special-cases "/g4t1" for the hub.
+# Lifecycle Events are the exception - they carry `node.get_name()`
+# ("oximeter_node") - so they are translated on arrival. Without that, a
+# component ends up with r_curr/r_ref keyed by BSN name and
+# freq/exception_buffer/kp_individual keyed by node name, and
+# apply_reli_strategy raises KeyError on the first of those it touches.
+# Kept in sync with data_access.component_mapping and
+# param_adapter.bsn_to_ros_mapping.
+NODE_TO_BSN_COMPONENT = {
+    "thermometer_node": "/g3t1_3",
+    "oximeter_node": "/g3t1_1",
+    "ecg_node": "/g3t1_2",
+    "abps_node": "/g3t1_4",
+    "abpd_node": "/g3t1_5",
+    "glucosemeter_node": "/g3t1_6",
+    "central_hub_node": "/g4t1",
+}
+
+
+def bsn_component_name(name):
+    """Resolve `name` to the BSN component identifier used as the key for
+    every per-component dict in the Enactor. Idempotent: a name that is
+    already a BSN identifier ("/g3t1_1") is returned unchanged.
+    """
+    key = name.lstrip("/")
+    if key in NODE_TO_BSN_COMPONENT:
+        return NODE_TO_BSN_COMPONENT[key]
+    return name if name.startswith("/") else f"/{key}"
+
+
 class Enactor(Node):
     """
     Enactor component for BSN system
@@ -72,7 +106,16 @@ class Enactor(Node):
         # Publishers (matching C++ original)
         self.adapt = self.create_publisher(
             AdaptationCommand, 'reconfigure', qos_profile)
-            
+
+        # Audit trail only - logger.py's log_adapt subscriber persists a
+        # record of every issued command, but does not relay it onward
+        # (delivery is this node's own direct publish to `reconfigure`,
+        # above; see Controller._send_adaptation_command for why both exist
+        # rather than routing through the relay - MANAGING_SYSTEM_GAPS.md
+        # finding #3).
+        self.log_adapt_pub = self.create_publisher(
+            AdaptationCommand, 'log_adapt', qos_profile)
+
         self.except_pub = self.create_publisher(
             ExceptionMsg, 'exception', qos_profile)
         

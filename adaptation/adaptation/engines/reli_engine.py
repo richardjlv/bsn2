@@ -115,7 +115,9 @@ class ReliabilityEngine(Engine):
             rclpy.spin_until_future_complete(self, future, timeout_sec=2.0)
 
             if future.result():
-                response_content = future.result()
+                # `.content` - the response is a DataAccessRequest_Response
+                # message, not the string these handlers parse.
+                response_content = future.result().content
                 self._process_reliability_response(response_content)
             else:
                 self.get_logger().error("Failed to connect to data access node.")
@@ -181,7 +183,8 @@ class ReliabilityEngine(Engine):
             rclpy.spin_until_future_complete(self, future, timeout_sec=2.0)
 
             if future.result():
-                response_content = future.result()
+                # `.content`, same as the reliability query above.
+                response_content = future.result().content
                 self._process_context_response(response_content)
             else:
                 self.get_logger().error(
@@ -277,57 +280,111 @@ class ReliabilityEngine(Engine):
             f"Planning: setpoint={self.setpoint}, r_curr={r_curr}, error={error}"
         )
 
-        # Get R_ components
+        # Get R_ components, and reset every active one's strategy value
+        # before searching - unconditionally to r_curr for one that is
+        # active and not deactivated, or to 1.0 for one that is deactivated.
+        # Matches ReliabilityEngine.cpp:203-216 exactly: the earlier version
+        # of this method tied that reset to the sign of `error` instead
+        # (r_curr when error>0, else 1.0 for *every* active term), which
+        # forced every component to its ceiling whenever the system was
+        # already over-reliable - not what the reference implementation
+        # does, and not needed, since the offset/gain search below already
+        # decides which direction to move each term.
         r_vec = []
         for key in self.strategy:
-            if key.startswith("R_"):
-                task = key[2:]
-                ctx_key = f"CTX_{task}"
-                f_key = f"F_{task}"
+            if not key.startswith("R_"):
+                continue
+            task = key[2:]
+            ctx_key = f"CTX_{task}"
+            f_key = f"F_{task}"
 
-                # Check if component is active
-                if (
-                    self.strategy.get(ctx_key, 0) != 0
-                    and self.strategy.get(f_key, 0) != 0
-                    and not self.deactivated_components.get(key, 0)
-                ):
+            # Skip inactive components (ctx=0 or f=0) - avoids looping
+            # forever trying to move a term that can never affect the
+            # product it belongs to.
+            if self.strategy.get(ctx_key, 0) == 0 or self.strategy.get(f_key, 0) == 0:
+                continue
 
-                    r_vec.append(key)
-
-                    # Reset strategy values
-                    if error > 0:
-                        self.strategy[key] = r_curr
-                    else:
-                        self.strategy[key] = 1.0
+            if not self.deactivated_components.get(key, 0):
+                r_vec.append(key)
+                self.strategy[key] = r_curr
+            else:
+                self.strategy[key] = 1.0
 
         # Reorder r_vec based on priority
         r_vec.sort(key=lambda x: self.priority.get(x, 0))
 
-        # Generate solutions
+        # Generate solutions. For each candidate starting term, coordinate-
+        # descend: offset every active term toward r_curr, climb the
+        # candidate term step by step toward the setpoint, then climb every
+        # other term the same way, each holding the others' results fixed.
+        # Matches ReliabilityEngine.cpp:224-283. The earlier version of this
+        # method only ever took a *single* `gain * error` step on a *single*
+        # term per solution - fine if one lightly-off component can be
+        # nudged into tolerance in one shot, but this system's formula
+        # multiplies together all seven components
+        # (resource/model/reliability.formula), so with more than one of
+        # them degraded a single small step on a single term can never climb
+        # the aggregate into a +-2% band. Confirmed live: without this loop,
+        # `plan()` logged "Did not converge :(" every cycle while the
+        # measured error grew instead of shrinking.
         solutions = []
 
-        for r_key in r_vec:
-            # Create solution copy
-            solution = self.strategy.copy()
-
-            # Apply offset
-            if error > 0:
-                solution[r_key] = r_curr * (1 - self.offset) if self.offset else r_curr
-            else:
-                new_val = r_curr * (1 + self.offset) if self.offset else r_curr
-                solution[r_key] = min(1.0, new_val)
-
-            # Apply gain-based adjustment
-            if self.gain > 0:
+        for i_key in r_vec:
+            # Offset: move every active term toward r_curr, a shared
+            # starting point for this candidate's search.
+            for term in r_vec:
                 if error > 0:
-                    solution[r_key] += self.gain * error
-                else:
-                    solution[r_key] += self.gain * error
+                    self.strategy[term] = r_curr * (1 - self.offset)
+                elif error < 0:
+                    self.strategy[term] = min(1.0, r_curr * (1 + self.offset))
+            r_new = self.calculate_qos(self.target_system_model, self.strategy)
 
-                # Clamp between 0 and 1
-                solution[r_key] = max(0.0, min(1.0, solution[r_key]))
+            prev = dict(self.strategy)
+            if error > 0:
+                while True:
+                    prev = dict(self.strategy)
+                    r_prev = r_new
+                    self.strategy[i_key] += self.gain * error
+                    r_new = self.calculate_qos(self.target_system_model, self.strategy)
+                    if not (r_new < self.setpoint and r_prev < r_new and 0 < self.strategy[i_key] < 1):
+                        break
+            elif error < 0:
+                while True:
+                    prev = dict(self.strategy)
+                    r_prev = r_new
+                    self.strategy[i_key] += self.gain * error
+                    r_new = self.calculate_qos(self.target_system_model, self.strategy)
+                    if not (r_new > self.setpoint and r_prev > r_new and 0 < self.strategy[i_key] < 1):
+                        break
 
-            solutions.append(solution)
+            # Roll back to the state just before the loop's last step - the
+            # candidate term's best value from this climb.
+            self.strategy = prev
+            r_new = self.calculate_qos(self.target_system_model, self.strategy)
+
+            for j_key in r_vec:
+                if j_key == i_key:
+                    continue
+                if error > 0:
+                    while True:
+                        prev = dict(self.strategy)
+                        r_prev = r_new
+                        self.strategy[j_key] += self.gain * error
+                        r_new = self.calculate_qos(self.target_system_model, self.strategy)
+                        if not (r_new < self.setpoint and r_prev < r_new and 0 < self.strategy[j_key] < 1):
+                            break
+                elif error < 0:
+                    while True:
+                        prev = dict(self.strategy)
+                        r_prev = r_new
+                        self.strategy[j_key] += self.gain * error
+                        r_new = self.calculate_qos(self.target_system_model, self.strategy)
+                        if not (r_new > self.setpoint and r_prev > r_new and 0 < self.strategy[j_key] < 1):
+                            break
+                self.strategy = prev
+                r_new = self.calculate_qos(self.target_system_model, self.strategy)
+
+            solutions.append(dict(self.strategy))
 
         # Test solutions
         for solution in solutions:
