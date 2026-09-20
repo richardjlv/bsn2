@@ -24,6 +24,18 @@ from shared_components.test_components.node_setups import (
 )
 from central_hub.central_hub import CentralHub
 
+
+def _central_hub_params():
+    """Load the production central_hub.yaml as parameter overrides ('component' must be non-empty).
+    'enable_adaptation' is forced to False: otherwise the node blocks waiting for the
+    EffectorRegister service, which unit tests don't start."""
+    params = get_param("central_hub", "central_hub_node", "central_hub.yaml")
+    return [
+        Parameter(name="enable_adaptation", value=False) if p.name == "enable_adaptation" else p
+        for p in params
+    ]
+
+
 @pytest.fixture(scope="module")
 def ros_context():
     """Initialize ROS once for all tests in this module."""
@@ -40,7 +52,7 @@ def central_hub_node(request):
     """Create a central hub node for testing."""
     ensure_ros_init()
     # Create node and assign to class
-    node = CentralHub()
+    node = CentralHub(node_name="central_hub_node", parameters=_central_hub_params())
     node.get_logger().set_level(rclpy.logging.LoggingSeverity.DEBUG)
     
     # Create a separate executor for this node
@@ -119,7 +131,7 @@ def direct_central_hub():
     ensure_ros_init()
     
     # Create node
-    node = CentralHub()
+    node = CentralHub(node_name="central_hub_node", parameters=_central_hub_params())
     node.get_logger().info("Direct test: Creating Central Hub node")
     
     # Create executor
@@ -170,7 +182,7 @@ def unified_central_hub_context(request):
     ensure_ros_init()
     
     # Create central hub node
-    hub = CentralHub()
+    hub = CentralHub(node_name="central_hub_node", parameters=_central_hub_params())
     hub.get_logger().set_level(rclpy.logging.LoggingSeverity.DEBUG)
     
     # Use ExecutorThread for proper management

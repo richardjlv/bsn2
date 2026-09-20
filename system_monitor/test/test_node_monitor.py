@@ -316,8 +316,8 @@ class TestSystemMonitor:
             assert monitor.monitored_nodes[test_node_name]['content'] == "activated"
             assert monitor.monitored_nodes[test_node_name]['task'] == "measuring"
             
-            # 3. Send recharge event
-            event_msg.content = "recharging"
+            # 3. Send recharge event (EventType.RECHARGE)
+            event_msg.content = "recharge"
             event_pub.publish(event_msg)
             time.sleep(0.5)
             
@@ -393,7 +393,7 @@ class TestSystemMonitor:
             assert received_messages[0].source == test_node_name  # ← Check source field
             assert received_messages[0].content == 'activated'    # ← Check content field
             assert received_messages[0].task == 'measuring'       # ← Check task field
-            assert received_messages[0].target == 'system'       # ← Check target field
+            assert received_messages[0].target == 'logger'       # ← Check target field
             
         finally:
             # Clean up
@@ -493,7 +493,7 @@ class TestSystemMonitor:
                 
             def add_node(self, node):
                 executor_add_called[0] = True
-                assert node.get_name() == 'system_monitor'
+                assert node.get_name() == 'node_monitor'
                 
             def spin(self):
                 executor_spin_called[0] = True
@@ -508,12 +508,13 @@ class TestSystemMonitor:
         
         # Mock the SystemMonitor class
         class MockSystemMonitor:
-            def __init__(self):
+            def __init__(self, node_name='node_monitor', parameters=None):
                 node_created[0] = True
+                self.node_name = node_name
                 self.destroyed = False
-                
+
             def get_name(self):
-                return 'system_monitor'
+                return self.node_name
                 
             def destroy_node(self):
                 self.destroyed = True

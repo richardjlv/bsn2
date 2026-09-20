@@ -1,14 +1,6 @@
 """launch_testing harness for ../steps/test_knowledge_repo.py.
-
-Same stack as test_check_bsn_bdd.py/test_injector_bdd.py (central_hub's
-emergency_detection_launch.py) - knowledge_repo.feature relies on
-conftest.py's default `bsn_system` fixture, which expects exactly this
-launch file's LIFECYCLE_NODES. The scenario is xfail (no /data_access node
-exists to bring up - see ../features/KNOWLEDGE_REPO_GAPS.md), so this
-harness still asserts `returncode == 0`: pytest itself exits 0 for an xfail
-(not xpass) result, same as every other harness in this package. See
-harness.py's module docstring for the launch/skip contract this relies on.
-"""
+Same stack as test_check_bsn_bdd.py (emergency_detection_launch.py), which already launches
+`/data_access`; see harness.py's module docstring for the launch/skip contract."""
 
 import os
 import unittest

@@ -317,7 +317,7 @@ def data_access_node(request, rclpy_context):
     
     # Create DataAccess node
     # This will run the node's own __init__ which correctly calls _initialize_component_data
-    node = DataAccess()
+    node = DataAccess(node_name="data_access")
     node.get_logger().set_level(rclpy.logging.LoggingSeverity.DEBUG)
     
     # FIX: REMOVE the manual, incorrect overwriting of the node's internal state.

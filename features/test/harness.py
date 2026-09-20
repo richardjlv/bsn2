@@ -1,46 +1,20 @@
-"""Shared helpers for the launch_testing files next to this one under test/.
-
-Each test/test_*_bdd.py brings up its own stack via generate_test_description
-(a launch file per BDD feature, mirroring how ROS1 pointed a `rostest` .test
-file at each feature), waits for the lifecycle nodes it cares about to reach
-'active', then runs the corresponding ../steps/test_*.py as a `pytest`
-subprocess - matching what those files' own docstrings already describe.
-Centralized here instead of duplicated per file since all the harnesses need
-the exact same two steps, just with different node/file names.
-
-A plain module in test/, not an installed package: pytest puts a test file's
-own directory on sys.path, so `import harness` resolves here without setup.py
-installing anything. That keeps the specs and the code that runs them in one
-source tree, with no build/ or site-packages copy that could go stale or
-resolve FEATURES_DIR somewhere it does not exist.
-
-Who launches what: ../steps/conftest.py's `bsn_system` fixture (and
-test_bsn_p03.py's override of it) never launches or tears down anything
-itself - it only verifies the right stack is already active, which by the
-time run_bdd_steps below invokes it, this module's own
-wait_for_lifecycle_active call already made true.
-"""
+"""Shared helpers for the launch_testing files under test/. Each test_*_bdd.py launches its own stack, waits for
+the lifecycle nodes to be 'active', then runs ../steps/test_*.py as a pytest subprocess. A plain module (not an
+installed package): pytest puts this directory on sys.path, so `import harness` works without setup.py."""
 
 import os
 import subprocess
 import sys
 import time
 
-# The package root, which is the features/ directory itself: the .feature
-# specs sit at its top level, their step definitions in steps/, and these
-# harnesses in test/. One directory up from here, with nothing installed in
-# between (see this module's docstring).
+# The package root: the features/ directory itself (specs at the top level, steps in steps/, harnesses in test/).
 FEATURES_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 
-def wait_for_lifecycle_active(node_names, timeout_s=30.0):
-    """Poll `ros2 lifecycle get <name>` for each name until every one
-    reports 'active' or `timeout_s` elapses.
-
-    Returns the set of names still not active (empty on success) rather than
-    raising, so callers can produce their own assertion message with context
-    about which launch file/feature was being brought up.
-    """
+def wait_for_lifecycle_active(node_names, timeout_s=60.0):
+    """Poll `ros2 lifecycle get <name>` for each name until all report 'active' or `timeout_s` elapses.
+    Returns the set still not active (empty on success) instead of raising. 60s, not 30s: each poll
+    spawns a subprocess, and back-to-back suites can outrun 30s under contention."""
     deadline = time.time() + timeout_s
     pending = set(node_names)
     while pending and time.time() < deadline:
@@ -72,21 +46,9 @@ def nodes_online(*node_names):
 
 
 def wait_for_topic_subscribers(topic_names, timeout_s=30.0):
-    """Poll `ros2 topic info <name>` for each name until every one reports at
-    least one subscriber, or `timeout_s` elapses.
-
-    A lifecycle node reaching 'active' (wait_for_lifecycle_active) only means
-    its own on_configure/on_activate finished - it says nothing about
-    shared_components/adaptation_handler.py's registration flow
-    (EffectorRegister call -> async response callback -> create_subscription
-    on `reconfigure_<node>`), which runs independently and can still be
-    pending. A scenario that asserts on that subscription existing (e.g.
-    target_system.feature's "reconfiguration command" topology checks) races
-    it without this wait, and fails intermittently rather than reliably.
-
-    Returns the set of topic names still without a subscriber (empty on
-    success), same contract as wait_for_lifecycle_active.
-    """
+    """Poll `ros2 topic info <name>` for each name until all report a subscriber, or `timeout_s` elapses.
+    A node being 'active' doesn't mean adaptation_handler's async EffectorRegister registration finished,
+    so topology checks on `reconfigure_<node>` race without this wait. Returns the topics still lacking one."""
     deadline = time.time() + timeout_s
     pending = set(topic_names)
     while pending and time.time() < deadline:
@@ -111,19 +73,11 @@ def wait_for_topic_subscribers(topic_names, timeout_s=30.0):
 
 
 def run_bdd_steps(relative_test_path):
-    """Run one steps/test_*.py file as a `pytest`
-    subprocess. Returns the subprocess.CompletedProcess (stdout/stderr
-    inherited, so pytest's own output - including step failures - shows up
-    directly in this test's output instead of being swallowed).
-    """
+    """Run one steps/test_*.py file as a `pytest` subprocess and return the CompletedProcess
+    (stdout/stderr inherited, so step failures show up directly in this test's output)."""
     env = dict(os.environ)
-    # colcon's `--pytest-args` (e.g. to select a single *_bdd.py file) sets
-    # PYTEST_ADDOPTS on the *outer* pytest process running this launch_test.
-    # Left in place, it leaks into this inner pytest run and gets applied
-    # relative to the wrong cwd - e.g. `--pytest-args test/test_bsn_p03_bdd.py`
-    # makes this inner run also try (and fail) to collect that same path
-    # under FEATURES_DIR, where it doesn't exist, aborting with "no tests
-    # ran" before even looking at `relative_test_path`.
+    # colcon's `--pytest-args` sets PYTEST_ADDOPTS on the outer pytest; left in place it leaks into this
+    # inner run and is applied relative to the wrong cwd (e.g. collecting a path that doesn't exist here).
     env.pop("PYTEST_ADDOPTS", None)
     return subprocess.run(
         [sys.executable, "-m", "pytest", "-v", relative_test_path],

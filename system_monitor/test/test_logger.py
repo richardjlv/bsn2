@@ -30,7 +30,7 @@ def setup_ros():
 @pytest.fixture(scope="function")
 def logger_node(setup_ros):
     """Create a Logger node for testing"""
-    logger = Logger()
+    logger = Logger("logger_node")
     logger.get_logger().info("Logger started")
     
     yield logger
@@ -74,7 +74,7 @@ class TestLogger:
         
         # Create test node and logger
         test_node = rclpy.create_node("test_status_node")
-        logger = Logger()
+        logger = Logger("logger_node")
         
         # Create mock publisher
         status_pub = test_node.create_publisher(Status, 'log_status', 10)
@@ -138,7 +138,7 @@ class TestLogger:
         
         # Create test node and logger
         test_node = rclpy.create_node("test_event_node")
-        logger = Logger()
+        logger = Logger("logger_node")
         
         # Create mock publisher
         event_pub = test_node.create_publisher(Event, 'log_event', 10)
@@ -200,7 +200,7 @@ class TestLogger:
         
         # Create test node and logger
         test_node = rclpy.create_node("test_energy_node")
-        logger = Logger()
+        logger = Logger("logger_node")
         
         # Create mock publisher
         energy_pub = test_node.create_publisher(EnergyStatus, 'log_energy_status', 10)
@@ -262,7 +262,7 @@ class TestLogger:
         
         # Create test node and logger
         test_node = rclpy.create_node("test_adapt_node")
-        logger = Logger()
+        logger = Logger("logger_node")
         
         # Create mock publisher
         adapt_pub = test_node.create_publisher(AdaptationCommand, 'log_adapt', 10)
@@ -324,7 +324,7 @@ class TestLogger:
         
         # Create test node and logger
         test_node = rclpy.create_node("test_uncertainty_node")
-        logger = Logger()
+        logger = Logger("logger_node")
         
         # Create mock publisher
         uncertainty_pub = test_node.create_publisher(Uncertainty, 'log_uncertainty', 10)
@@ -411,7 +411,7 @@ class TestLogger:
         
         # Mock the Logger class
         class MockLogger:
-            def __init__(self):
+            def __init__(self, node_name=None, parameters=None):
                 node_created[0] = True
                 self.destroyed = False
                 self.frequency = 2.0
@@ -461,7 +461,7 @@ class TestLogger:
         """Test receiving messages with different timestamp handling"""
         # Create test node and logger
         test_node = rclpy.create_node("test_timestamp_node")
-        logger = Logger()
+        logger = Logger("logger_node")
         
         # Let's directly manipulate time_ref to test timestamp calculation
         original_time_ref = logger.time_ref

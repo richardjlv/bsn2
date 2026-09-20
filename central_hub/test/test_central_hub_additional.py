@@ -6,6 +6,7 @@ import pytest
 
 import central_hub.central_hub as ch_mod
 from test_central_hub_charac import ros_context  # reuse rclpy init/teardown fixture
+from fixtures import _central_hub_params
 
 
 class _DummyTimer:
@@ -22,7 +23,7 @@ class _DummyTimer:
 
 def test_on_activate_resets_existing_timer(monkeypatch, ros_context):
     """If a heartbeat timer already exists, on_activate should call reset() on it."""
-    hub = ch_mod.CentralHub()
+    hub = ch_mod.CentralHub(node_name="central_hub_node", parameters=_central_hub_params())
 
     # ensure active false initially
     hub.active = False
@@ -39,7 +40,7 @@ def test_on_activate_resets_existing_timer(monkeypatch, ros_context):
 
 def test_on_shutdown_cancels_timer(monkeypatch, ros_context):
     """on_shutdown should cancel an existing heartbeat timer and set _finalized."""
-    hub = ch_mod.CentralHub()
+    hub = ch_mod.CentralHub(node_name="central_hub_node", parameters=_central_hub_params())
 
     dummy = _DummyTimer()
     hub._heartbeat_timer = dummy
@@ -55,114 +56,54 @@ def test_on_shutdown_cancels_timer(monkeypatch, ros_context):
 
 
 def test_main_loop_with_mocks(monkeypatch):
-    """Run central_hub.main with rclpy and threading mocked to validate control flow without real ROS."""
+    """Validate main()'s wiring with rclpy/threading/CentralHub mocked out.
+    main() only constructs the hub and calls hub.run(); the run-loop branches are tested
+    against CentralHub.run() directly below."""
 
     calls = {
         'init': 0,
         'shutdown': 0,
-        'spin_called': False,
         'destroy_node': 0,
         'start_auto_management': 0,
-        'detect': 0,
+        'run': 0,
     }
 
-    # Fake rclpy functions/state
     def fake_init(args=None):
         calls['init'] += 1
-
-    ok_states = [True, False]
-
-    def fake_ok():
-        # pop the front each time
-        return ok_states.pop(0) if ok_states else False
 
     def fake_shutdown():
         calls['shutdown'] += 1
 
     def fake_spin(node):
-        # mark that spin would be called; do nothing else
-        calls['spin_called'] = True
+        return
 
     monkeypatch.setattr(ch_mod.rclpy, 'init', fake_init)
-    monkeypatch.setattr(ch_mod.rclpy, 'ok', fake_ok)
     monkeypatch.setattr(ch_mod.rclpy, 'shutdown', fake_shutdown)
     monkeypatch.setattr(ch_mod.rclpy, 'spin', fake_spin)
 
     # Replace threading.Thread so no real thread is spawned
     class DummyThread:
         def __init__(self, target=None, args=(), daemon=None):
-            self._target = target
-            self._args = args
-            self.started = False
+            return
 
         def start(self):
-            # don't run the target, just mark started
-            self.started = True
+            return
 
         def join(self, timeout=None):
             return
 
     monkeypatch.setattr(ch_mod.threading, 'Thread', DummyThread)
 
-    # Fake CentralHub to capture calls
     class FakeLifecycleManager:
         def start_auto_management(self):
             calls['start_auto_management'] += 1
 
-    class FakeBattery:
-        def __init__(self):
-            self.current_level = 50.0
-
-    class FakeBatteryManager:
-        def __init__(self):
-            self.is_recharging = True
-            self.battery = FakeBattery()
-
-        def recharge(self):
-            # simulate recharge increasing battery
-            self.battery.current_level += 1.0
-
-        def check_battery_status(self):
-            pass
-
-        def send_energy_status(self):
-            pass
-
     class FakeHub:
-        def __init__(self):
+        def __init__(self, node_name=None, parameters=None):
             self.lifecycle_manager = FakeLifecycleManager()
-            self._finalized = False
-            self.config = types.SimpleNamespace(frequency=100.0)
-            self.battery_manager = FakeBatteryManager()
-            self._destroyed = False
 
-        def create_rate(self, freq):
-            class Rate:
-                def __init__(self):
-                    pass
-
-                def sleep(self):
-                    # no-op sleep
-                    return
-
-            return Rate()
-
-        def is_active(self):
-            # return False to exercise recharge branch
-            return False
-
-        def detect(self):
-            calls['detect'] += 1
-
-        def get_logger(self):
-            class L:
-                def debug(self, *_a, **_k):
-                    return
-
-                def info(self, *_a, **_k):
-                    return
-
-            return L()
+        def run(self):
+            calls['run'] += 1
 
         def destroy_node(self):
             calls['destroy_node'] += 1
@@ -173,20 +114,17 @@ def test_main_loop_with_mocks(monkeypatch):
     # Now call main(); it should return cleanly
     ch_mod.main(args=None)
 
-    # Assert that our patched functions were used
     assert calls['init'] == 1
-    # start_auto_management should have been invoked
     assert calls['start_auto_management'] == 1
-    # shutdown should have been called once in finally
+    assert calls['run'] == 1
     assert calls['shutdown'] == 1
-    # destroy_node should be called
     assert calls['destroy_node'] == 1
 
 
 def test_on_configure_exception_branch(ros_context):
     from rclpy.lifecycle import TransitionCallbackReturn
 
-    hub = ch_mod.CentralHub()
+    hub = ch_mod.CentralHub(node_name="central_hub_node", parameters=_central_hub_params())
 
     def bad_setup():
         raise RuntimeError("setup failed")
@@ -201,7 +139,7 @@ def test_on_configure_exception_branch(ros_context):
 def test_on_activate_exception_branch(ros_context):
     from rclpy.lifecycle import TransitionCallbackReturn
 
-    hub = ch_mod.CentralHub()
+    hub = ch_mod.CentralHub(node_name="central_hub_node", parameters=_central_hub_params())
     hub._heartbeat_timer = None
 
     def bad_event(*_a, **_k):
@@ -217,7 +155,7 @@ def test_on_activate_exception_branch(ros_context):
 def test_on_deactivate_exception_branch(ros_context):
     from rclpy.lifecycle import TransitionCallbackReturn
 
-    hub = ch_mod.CentralHub()
+    hub = ch_mod.CentralHub(node_name="central_hub_node", parameters=_central_hub_params())
 
     def bad_event(*_a, **_k):
         raise RuntimeError("event failed")
@@ -232,7 +170,7 @@ def test_on_deactivate_exception_branch(ros_context):
 def test_on_cleanup_exception_branch(ros_context):
     from rclpy.lifecycle import TransitionCallbackReturn
 
-    hub = ch_mod.CentralHub()
+    hub = ch_mod.CentralHub(node_name="central_hub_node", parameters=_central_hub_params())
 
     def bad_cleanup():
         raise RuntimeError("cleanup failed")
@@ -247,7 +185,7 @@ def test_on_cleanup_exception_branch(ros_context):
 def test_on_shutdown_failure_branch(ros_context):
     from rclpy.lifecycle import TransitionCallbackReturn
 
-    hub = ch_mod.CentralHub()
+    hub = ch_mod.CentralHub(node_name="central_hub_node", parameters=_central_hub_params())
 
     class BadTimer:
         def cancel(self):
@@ -260,188 +198,79 @@ def test_on_shutdown_failure_branch(ros_context):
     assert result == TransitionCallbackReturn.FAILURE
 
 
+# The tests below call CentralHub.run() directly against a lightweight stub (same technique as
+# test_central_hub_source_coverage.py), since the run loop moved out of main() into hub.run().
+
+
+class _RunStub:
+    """Minimal stand-in satisfying everything CentralHub.run() touches."""
+
+    def __init__(self, finalized=False, active=True, recharging=False, sleep_effect=None):
+        self._finalized = finalized
+        self.config = types.SimpleNamespace(frequency=10.0)
+        self.battery_manager = types.SimpleNamespace(
+            is_recharging=recharging,
+            recharge=lambda: None,
+        )
+        self._active = active
+        self._sleep_effect = sleep_effect
+        self.detect_calls = 0
+        self.sleep_calls = 0
+
+    def create_rate(self, _frequency):
+        stub = self
+
+        class Rate:
+            def sleep(self_inner):
+                stub.sleep_calls += 1
+                if stub._sleep_effect is not None:
+                    raise stub._sleep_effect
+
+        return Rate()
+
+    def is_active(self):
+        return self._active
+
+    def detect(self):
+        self.detect_calls += 1
+
+    def get_logger(self):
+        class L:
+            def debug(self, *_a, **_k):
+                return
+
+        return L()
+
+
 def test_main_finalized_break_branch(monkeypatch):
-    calls = {'shutdown': 0, 'destroy': 0, 'detect': 0}
-
-    monkeypatch.setattr(ch_mod.rclpy, 'init', lambda args=None: None)
+    """run() should break out of its loop immediately when _finalized is set."""
     monkeypatch.setattr(ch_mod.rclpy, 'ok', lambda: True)
-    monkeypatch.setattr(ch_mod.rclpy, 'spin', lambda _hub: None)
-    monkeypatch.setattr(ch_mod.rclpy, 'shutdown', lambda: calls.__setitem__('shutdown', calls['shutdown'] + 1))
+    stub = _RunStub(finalized=True)
 
-    class DummyThread:
-        def __init__(self, *a, **k):
-            return
+    ch_mod.CentralHub.run(stub)
 
-        def start(self):
-            return
-
-        def join(self, timeout=None):
-            return
-
-    monkeypatch.setattr(ch_mod.threading, 'Thread', DummyThread)
-
-    class FakeLifecycle:
-        def start_auto_management(self):
-            return
-
-    class FakeHub:
-        def __init__(self):
-            self.lifecycle_manager = FakeLifecycle()
-            self._finalized = True
-            self.config = types.SimpleNamespace(frequency=10.0)
-            self.battery_manager = types.SimpleNamespace(
-                is_recharging=False,
-                battery=types.SimpleNamespace(current_level=50.0)
-            )
-
-        def create_rate(self, _f):
-            class Rate:
-                def sleep(self_inner):
-                    return
-            return Rate()
-
-        def is_active(self):
-            return True
-
-        def detect(self):
-            calls['detect'] += 1
-
-        def get_logger(self):
-            class L:
-                def debug(self, *_a, **_k):
-                    return
-            return L()
-
-        def destroy_node(self):
-            calls['destroy'] += 1
-
-    monkeypatch.setattr(ch_mod, 'CentralHub', FakeHub)
-
-    ch_mod.main(args=None)
-
-    assert calls['destroy'] == 1
+    assert stub.detect_calls == 0
+    assert stub.sleep_calls == 0
 
 
 def test_main_active_detect_branch(monkeypatch):
-    calls = {'shutdown': 0, 'destroy': 0, 'detect': 0}
+    """run() should call detect() once per iteration while active and not recharging."""
     ok_values = [True, False]
-
-    monkeypatch.setattr(ch_mod.rclpy, 'init', lambda args=None: None)
     monkeypatch.setattr(ch_mod.rclpy, 'ok', lambda: ok_values.pop(0) if ok_values else False)
-    monkeypatch.setattr(ch_mod.rclpy, 'spin', lambda _hub: None)
-    monkeypatch.setattr(ch_mod.rclpy, 'shutdown', lambda: calls.__setitem__('shutdown', calls['shutdown'] + 1))
+    stub = _RunStub(active=True, recharging=False)
 
-    class DummyThread:
-        def __init__(self, *a, **k):
-            return
+    ch_mod.CentralHub.run(stub)
 
-        def start(self):
-            return
-
-        def join(self, timeout=None):
-            return
-
-    monkeypatch.setattr(ch_mod.threading, 'Thread', DummyThread)
-
-    class FakeLifecycle:
-        def start_auto_management(self):
-            return
-
-    class FakeHub:
-        def __init__(self):
-            self.lifecycle_manager = FakeLifecycle()
-            self._finalized = False
-            self.config = types.SimpleNamespace(frequency=10.0)
-            self.battery_manager = types.SimpleNamespace(
-                is_recharging=False,
-                battery=types.SimpleNamespace(current_level=50.0)
-            )
-
-        def create_rate(self, _f):
-            class Rate:
-                def sleep(self_inner):
-                    return
-            return Rate()
-
-        def is_active(self):
-            return True
-
-        def detect(self):
-            calls['detect'] += 1
-
-        def get_logger(self):
-            class L:
-                def debug(self, *_a, **_k):
-                    return
-            return L()
-
-        def destroy_node(self):
-            calls['destroy'] += 1
-
-    monkeypatch.setattr(ch_mod, 'CentralHub', FakeHub)
-
-    ch_mod.main(args=None)
-
-    assert calls['detect'] == 1
+    assert stub.detect_calls == 1
+    assert stub.sleep_calls == 1
 
 
 def test_main_keyboardinterrupt_branch(monkeypatch):
-    calls = {'shutdown': 0, 'destroy': 0}
-
-    monkeypatch.setattr(ch_mod.rclpy, 'init', lambda args=None: None)
+    """run() should swallow a KeyboardInterrupt raised from rate.sleep() and return."""
     monkeypatch.setattr(ch_mod.rclpy, 'ok', lambda: True)
-    monkeypatch.setattr(ch_mod.rclpy, 'spin', lambda _hub: None)
-    monkeypatch.setattr(ch_mod.rclpy, 'shutdown', lambda: calls.__setitem__('shutdown', calls['shutdown'] + 1))
+    stub = _RunStub(active=True, sleep_effect=KeyboardInterrupt())
 
-    class DummyThread:
-        def __init__(self, *a, **k):
-            return
+    # Should not raise.
+    ch_mod.CentralHub.run(stub)
 
-        def start(self):
-            return
-
-        def join(self, timeout=None):
-            return
-
-    monkeypatch.setattr(ch_mod.threading, 'Thread', DummyThread)
-
-    class FakeLifecycle:
-        def start_auto_management(self):
-            return
-
-    class FakeHub:
-        def __init__(self):
-            self.lifecycle_manager = FakeLifecycle()
-            self._finalized = False
-            self.config = types.SimpleNamespace(frequency=10.0)
-            self.battery_manager = types.SimpleNamespace(
-                is_recharging=False,
-                battery=types.SimpleNamespace(current_level=50.0)
-            )
-
-        def create_rate(self, _f):
-            class Rate:
-                def sleep(self_inner):
-                    raise KeyboardInterrupt()
-            return Rate()
-
-        def is_active(self):
-            return True
-
-        def detect(self):
-            return
-
-        def get_logger(self):
-            class L:
-                def debug(self, *_a, **_k):
-                    return
-            return L()
-
-        def destroy_node(self):
-            calls['destroy'] += 1
-
-    monkeypatch.setattr(ch_mod, 'CentralHub', FakeHub)
-
-    ch_mod.main(args=None)
-
-    assert calls['shutdown'] == 1
+    assert stub.detect_calls == 1

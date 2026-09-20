@@ -4,7 +4,10 @@ from pathlib import Path
 
 
 def _load_source_module():
-    src = Path('/ros_ws/src/central_hub/central_hub/central_hub.py')
+    # Resolve relative to this test file instead of a hardcoded absolute
+    # workspace path, which broke as soon as this package moved to
+    # src/bsn_ros2/central_hub (the path used to be src/central_hub).
+    src = Path(__file__).resolve().parent.parent / 'central_hub' / 'central_hub.py'
     spec = importlib.util.spec_from_file_location('central_hub_source_cov', src)
     mod = importlib.util.module_from_spec(spec)
     assert spec.loader is not None
@@ -147,61 +150,26 @@ def test_source_on_shutdown_failure_branch():
 
 
 def test_source_main_keyboardinterrupt_branch(monkeypatch):
+    """CentralHub.run() should swallow a KeyboardInterrupt raised from rate.sleep().
+
+    This used to drive the branch through a mocked main(), back when main()
+    contained the run loop inline. main() now only calls hub.run() (the loop
+    branches live in CentralHub.run()), so the branch is exercised directly
+    against the unbound run() method instead - same technique as the
+    on_configure/on_activate/... tests above.
+    """
     mod = _load_source_module()
 
-    calls = {'shutdown': 0, 'destroy': 0}
+    hub = _HubStub()
+    hub.active = True
+    hub.config = types.SimpleNamespace(frequency=1.0)
+    hub.detect = lambda: None
 
-    class FakeLifecycle:
-        def start_auto_management(self):
-            return
+    def _raise_keyboard_interrupt(*_a, **_k):
+        raise KeyboardInterrupt()
 
-    class FakeHub:
-        def __init__(self):
-            self.lifecycle_manager = FakeLifecycle()
-            self._finalized = False
-            self.config = types.SimpleNamespace(frequency=1.0)
-            self.battery_manager = types.SimpleNamespace(
-                is_recharging=False,
-                battery=types.SimpleNamespace(current_level=42.0),
-            )
-
-        def is_active(self):
-            return True
-
-        def detect(self):
-            return
-
-        def create_rate(self, _f):
-            class _Rate:
-                def sleep(self_inner):
-                    raise KeyboardInterrupt()
-
-            return _Rate()
-
-        def get_logger(self):
-            return _Logger()
-
-        def destroy_node(self):
-            calls['destroy'] += 1
-
-    class DummyThread:
-        def __init__(self, *a, **k):
-            return
-
-        def start(self):
-            return
-
-        def join(self, timeout=None):
-            return
-
-    monkeypatch.setattr(mod, 'CentralHub', FakeHub)
-    monkeypatch.setattr(mod.threading, 'Thread', DummyThread)
-    monkeypatch.setattr(mod.rclpy, 'init', lambda args=None: None)
+    hub.create_rate = lambda _f: types.SimpleNamespace(sleep=_raise_keyboard_interrupt)
     monkeypatch.setattr(mod.rclpy, 'ok', lambda: True)
-    monkeypatch.setattr(mod.rclpy, 'spin', lambda _hub: None)
-    monkeypatch.setattr(mod.rclpy, 'shutdown', lambda: calls.__setitem__('shutdown', calls['shutdown'] + 1))
 
-    mod.main(args=None)
-
-    assert calls['destroy'] == 1
-    assert calls['shutdown'] == 1
+    # Should not raise.
+    mod.CentralHub.run(hub)

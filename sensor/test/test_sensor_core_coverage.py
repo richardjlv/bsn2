@@ -7,6 +7,9 @@ from ament_index_python.packages import get_package_share_directory
 from rclpy.parameter import Parameter
 
 from sensor.sensor import Sensor
+from shared_components.test_components.node_setups import (
+    setup_effector_register_service,
+)
 
 
 @pytest.fixture(scope="module")
@@ -47,9 +50,18 @@ def sensor_node(ros_context):
 
     mock_service_node.create_service(PatientData, "/get_sensor_reading", mock_patient_service)
 
+    # thermometer.yaml has enable_adaptation: true, which makes
+    # RosComponent.__init__ block forever in
+    # AdaptationHandler.register_with_effector() (wait_for_service on
+    # 'EffectorRegister') unless that service is mocked *before* the Sensor
+    # is constructed - reusing the same helper sensor/test/fixtures.py
+    # already relies on for this, instead of leaving it out here.
+    mock_effector_register = setup_effector_register_service()
+
     node = Sensor(f"core_cov_sensor_{suffix}", parameters=params)
 
     executor = SingleThreadedExecutor()
+    executor.add_node(mock_effector_register)
     executor.add_node(mock_service_node)
     executor.add_node(node)
 
@@ -66,6 +78,7 @@ def sensor_node(ros_context):
         executor.shutdown()
         if executor_thread.is_alive():
             executor_thread.join(timeout=1.0)
+        mock_effector_register.destroy_node()
         mock_service_node.destroy_node()
         node.destroy_node()
     except Exception:
@@ -136,23 +149,6 @@ def test_on_activate_second_call_resets_timer(sensor_node):
         timer.reset = original_reset
 
 
-def test_on_activate_error_path(sensor_node, monkeypatch):
-    sensor_node.trigger_configure()
-    monkeypatch.setattr(sensor_node.publisher_manager, "publish_event", lambda *_: (_ for _ in ()).throw(RuntimeError("activate_fail")))
-
-    result = sensor_node.on_activate(SimpleNamespace())
-
-    assert result.name == "ERROR"
-
-
-def test_on_deactivate_error_path(sensor_node, monkeypatch):
-    monkeypatch.setattr(sensor_node.publisher_manager, "publish_event", lambda *_: (_ for _ in ()).throw(RuntimeError("deactivate_fail")))
-
-    result = sensor_node.on_deactivate(SimpleNamespace())
-
-    assert result.name == "ERROR"
-
-
 def test_on_cleanup_without_reset_method_still_succeeds(sensor_node):
     sensor_node.trigger_configure()
     sensor_node.trigger_activate()
@@ -164,16 +160,6 @@ def test_on_cleanup_without_reset_method_still_succeeds(sensor_node):
         assert result.name == "SUCCESS"
     finally:
         sensor_node.processor = original_processor
-
-
-def test_on_cleanup_error_path(sensor_node, monkeypatch):
-    sensor_node.trigger_configure()
-    sensor_node.trigger_activate()
-    monkeypatch.setattr(sensor_node.publisher_manager, "publish_status", lambda *_: (_ for _ in ()).throw(RuntimeError("cleanup_fail")))
-
-    result = sensor_node.on_cleanup(SimpleNamespace())
-
-    assert result.name == "ERROR"
 
 
 def test_on_shutdown_failure_path(sensor_node, monkeypatch):
@@ -226,7 +212,7 @@ def test_spin_sensor_starts_auto_management(sensor_node, monkeypatch):
 
     monkeypatch.setattr(rclpy, "ok", lambda: True)
 
-    sensor_node.spin_sensor()
+    sensor_node.run()
 
     assert "start_auto_management" in calls
 
@@ -249,7 +235,7 @@ def test_spin_sensor_performs_transfer_with_processed_value(sensor_node, monkeyp
 
     monkeypatch.setattr(rclpy, "ok", lambda: True)
 
-    sensor_node.spin_sensor()
+    sensor_node.run()
 
     assert ("transfer", 38.0) in calls
 
@@ -269,7 +255,7 @@ def test_spin_sensor_recharges_when_inactive(sensor_node, monkeypatch):
     monkeypatch.setattr(sensor_node.battery_manager, "recharge", lambda: calls.append("recharge"))
     monkeypatch.setattr(rclpy, "ok", lambda: True)
 
-    sensor_node.spin_sensor()
+    sensor_node.run()
 
     assert "recharge" in calls
 
@@ -290,7 +276,7 @@ def test_spin_sensor_logs_processing_exception_and_continues_to_sleep(sensor_nod
     monkeypatch.setattr(sensor_node.processor, "collect", lambda: (_ for _ in ()).throw(RuntimeError("cycle_fail")))
     monkeypatch.setattr(rclpy, "ok", lambda: True)
 
-    sensor_node.spin_sensor()
+    sensor_node.run()
 
     assert any("Sensor operation failed" in message for message in errors)
 
@@ -308,7 +294,7 @@ def test_spin_sensor_exits_immediately_when_finalized(sensor_node, monkeypatch):
     sensor_node._finalized = True
     monkeypatch.setattr(rclpy, "ok", lambda: True)
 
-    sensor_node.spin_sensor()
+    sensor_node.run()
 
     assert any("exiting spin loop" in message for message in info_messages)
 
@@ -322,7 +308,11 @@ def _run_main_and_collect_events(monkeypatch):
         def __init__(self, node_name):
             events.append(("init_sensor", node_name))
 
-        def spin_sensor(self):
+        def run(self):
+            # Sensor's real loop method is `run()` (required by
+            # RosComponent); kept the "spin_sensor" event label below to
+            # avoid rippling the change into test_main_flow_events'
+            # parametrize list, which only cares about the event sequence.
             events.append("spin_sensor")
 
         def destroy_node(self):

@@ -193,26 +193,24 @@ class TestBaseEngine:
         assert self.engine_node.execute_called
 
     def test_body_method_structure(self):
-        """Test body method structure"""
+        """Test body method structure.
+        body() uses a plain time.sleep(period), not an rclpy Rate (a Rate blocks forever
+        when no executor spins the node)."""
         # Mock rclpy.ok() to return True once then False
         with patch('rclpy.ok', side_effect=[True, False]), \
              patch('rclpy.spin_once'), \
-             patch.object(self.engine_node, 'create_rate') as mock_create_rate, \
+             patch('adaptation.engines.base_engine.time.sleep') as mock_sleep, \
              patch.object(self.engine_node, 'fetch_formula', return_value=""), \
              patch.object(self.engine_node, 'monitor') as mock_monitor:
-            
-            # Mock rate
-            mock_rate = Mock()
-            mock_create_rate.return_value = mock_rate
-            
+
             # Run body method
             self.engine_node.body()
-            
+
             # Verify monitor was called
             mock_monitor.assert_called_once()
-            
-            # Verify rate was used
-            mock_rate.sleep.assert_called_once()
+
+            # Verify the loop paced itself with a plain sleep
+            mock_sleep.assert_called_once()
 
     def test_integrated_engine_cycle(self):
         """Test integrated engine cycle with mock services"""

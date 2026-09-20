@@ -375,18 +375,20 @@ class TestEnactor:
         assert published_msg.action == action
 
     def test_publish_exception_format(self):
-        """Test the format of the exception message"""
+        """Test the format of the exception message.
+        Content must be "<component>=<value>" (e.g. "/g3t1_1=1"), as in ROS1's Controller.cpp.
+        """
         component = "/g3t1_1"
         value = "1"
-        
+
         self.controller._publish_exception(component, value)
-        
+
         self.controller.except_pub.publish.assert_called_once()
         published_msg = self.controller.except_pub.publish.call_args[0][0]
-        
+
         assert isinstance(published_msg, BSNException)
         assert published_msg.source == self.controller.get_name()
-        assert published_msg.content == f"Component {component} has {value} exceptions"
+        assert published_msg.content == f"{component}={value}"
 
     # def test_receive_adaptation_parameter_query(self):
         # """Test receiving adaptation parameter query"""
@@ -415,7 +417,15 @@ class TestEnactor:
     def test_invocations_deque_behavior(self):
         """Test invocations deque behavior"""
         component = "/g3t1_1"
-        
+
+        # Other tests in this class set self.controller.freq[component] directly and never clean up;
+        # receive_event's "activate" skips already-tracked components, so deactivate first
+        # (pops every per-component dict) to guarantee a clean activation.
+        deactivate = Event()
+        deactivate.source = component
+        deactivate.content = "deactivate"
+        self.controller.receive_event(deactivate)
+
         # Activate component
         event = Event()
         event.source = component

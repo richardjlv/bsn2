@@ -12,7 +12,7 @@ from ament_index_python.packages import get_package_share_directory
 from rclpy.parameter import Parameter
 
 from bsn_interfaces.msg import SensorData
-from bsn_interfaces.msg import EnergyStatus, Event
+from bsn_interfaces.msg import EnergyStatus, Event, Status
 from bsn_interfaces.srv import PatientData
 
 
@@ -102,11 +102,8 @@ def _load_params_from_yaml(pkg_share, yaml_file, yaml_node_key):
 
 @pytest.fixture
 def sensor_fixture(ros_context, request):
-    """Create sensor node, mock patient service and a listener.
-    The request.param should be a tuple (yaml_file, yaml_node_key).
-    Returns an object with attributes:
-      node, listener, mock_service_node, set_mode(dict), received_messages, wait_for_message
-    """
+    """Create sensor node, mock patient service and a listener (request.param = (yaml_file, yaml_node_key)).
+    Returns an object with: node, listener, mock_service_node, set_mode(dict), received_messages, wait_for_message."""
     yaml_file, yaml_node_key = request.param
     pkg_share = get_package_share_directory("sensor")
     ros_params = _load_params_from_yaml(pkg_share, yaml_file, yaml_node_key)
@@ -145,6 +142,14 @@ def sensor_fixture(ros_context, request):
 
     test_service = mock_service_node.create_service(PatientData, "/get_sensor_reading", mock_patient_service)
 
+    # enable_adaptation: true makes RosComponent.__init__ block in register_with_effector() unless
+    # EffectorRegister is mocked before the Sensor is built (same helper as sensor/test/fixtures.py).
+    from shared_components.test_components.node_setups import (
+        setup_effector_register_service,
+    )
+
+    mock_effector_register = setup_effector_register_service()
+
     # Create the sensor node under test
     from sensor.sensor import Sensor
 
@@ -158,10 +163,11 @@ def sensor_fixture(ros_context, request):
     def on_msg(msg):
         received_messages.append(msg)
 
-    topic = f"sensor_data/{ros_params['sensor']}"
+    topic = f"sensor_data/{ros_params['component']}"
     listener.create_subscription(SensorData, topic, on_msg, 10)
 
     # Add nodes to executor and start
+    executor.add_node(mock_effector_register)
     executor.add_node(mock_service_node)
     executor.add_node(node)
     executor.add_node(listener)
@@ -235,6 +241,7 @@ def sensor_fixture(ros_context, request):
         if executor_thread.is_alive():
             executor_thread.join(timeout=1.0)
 
+        mock_effector_register.destroy_node()
         mock_service_node.destroy_node()
         listener.destroy_node()
         node.destroy_node()
@@ -284,7 +291,9 @@ def test_transfer_with_mid_risk_data(sensor_fixture):
     msg = o.wait_for_message(1, timeout=2.0)
     assert msg is not None, "Expected a SensorData message for mid risk"
     assert msg.sensor_datapoint == pytest.approx(datapoint)
-    assert msg.risk >= 20.0
+    # Strict lower bound, as in ROS1's SharedSensorTests: a risk of exactly 20.0 is *low* (bands low
+    # 0-20 / mid 21-65 / high 66-100) and must not pass as mid. ">= 20.0" only weakened the check.
+    assert msg.risk > 20.0
     assert msg.risk < 66.0
 
 
@@ -417,7 +426,7 @@ def test_send_energy_status_resets_cost(sensor_fixture):
     energy_messages = []
     o.listener.create_subscription(
         EnergyStatus,
-        f"collect_energy_status/{o.node.config.sensor}",
+        f"collect_energy_status/{o.node.config.component}",
         lambda msg: energy_messages.append(msg),
         10,
     )
@@ -434,29 +443,34 @@ def test_send_energy_status_resets_cost(sensor_fixture):
 
 @pytest.mark.parametrize("sensor_fixture", [SENSOR_CONFIGS[0]], indirect=True)
 def test_publish_heartbeat_reflects_recharge_and_active_state(sensor_fixture):
+    """publish_heartbeat() publishes a Status on 'component_status' (content always 'running'),
+    not an Event; the recharge/normal state is carried in the `task` field
+    (see PublisherManagerBase.publish_heartbeat)."""
     o = sensor_fixture
-    event_messages = []
+    status_messages = []
     o.listener.create_subscription(
-        Event,
-        "collect_event",
-        lambda msg: event_messages.append(msg),
+        Status,
+        "component_status",
+        lambda msg: status_messages.append(msg),
         10,
     )
 
     o.node.battery_manager.is_recharging = True
     o.node.publisher_manager.publish_heartbeat()
     start = time.time()
-    while len(event_messages) < 1 and time.time() - start < 2.0:
+    while len(status_messages) < 1 and time.time() - start < 2.0:
         time.sleep(0.02)
-    assert event_messages[-1].content == "recharging"
+    assert status_messages[-1].content == "running"
+    assert status_messages[-1].task == "recharging"
 
     o.node.battery_manager.is_recharging = False
     o.node.active = True
     o.node.publisher_manager.publish_heartbeat()
     start = time.time()
-    while len(event_messages) < 2 and time.time() - start < 2.0:
+    while len(status_messages) < 2 and time.time() - start < 2.0:
         time.sleep(0.02)
-    assert event_messages[-1].content == "activate"
+    assert status_messages[-1].content == "running"
+    assert status_messages[-1].task == "normal"
 
 
 @pytest.mark.parametrize("sensor_fixture", [SENSOR_CONFIGS[0]], indirect=True)
@@ -500,9 +514,9 @@ def test_risk_label_matches_expected_bands(sensor_fixture):
         risk = o.node.risk_manager.evaluate_risk(float(datapoint))
         assert o.node.risk_manager.get_risk_label(risk) == expected_label
 
-    # Some boundary values in ROS2 can land exactly on the low/mid threshold,
-    # so the migrated expectation allows either label at the boundary.
-    assert mid_label in {"low", "moderate"}
+    # Exact, not "either label at the boundary": 20.0 is deterministically "low" and the mid vectors
+    # score 28-50; the looser set() hid the input that would flag a config drifting to the low/mid edge.
+    assert mid_label == "moderate"
 
 
 @pytest.mark.parametrize("sensor_fixture", [SENSOR_CONFIGS[0]], indirect=True)
@@ -541,7 +555,10 @@ def test_risk_manager_parse_range_parameter_like_object():
     assert manager._parse_range(param_like) == (1.0, 2.0)
 
 
-def test_publish_heartbeat_without_battery_manager_uses_active_state():
+def test_publish_heartbeat_reflects_battery_manager_state_on_fake_node():
+    """Exercise PublisherManager.publish_heartbeat() against a minimal SimpleNamespace node.
+    It reads battery_manager.is_recharging unconditionally, so the fake node must provide one,
+    matching a real node's shape."""
     from sensor.components.publishers import PublisherManager
 
     published = []
@@ -554,13 +571,24 @@ def test_publish_heartbeat_without_battery_manager_uses_active_state():
 
     fake_node = SimpleNamespace(
         active=False,
-        config=SimpleNamespace(frequency="1.0", sensor="thermometer"),
+        config=SimpleNamespace(frequency="1.0", component="thermometer"),
+        battery_manager=SimpleNamespace(is_recharging=False),
         get_name=lambda: "fake_sensor",
-        get_logger=lambda: SimpleNamespace(debug=lambda *_: None, info=lambda *_: None),
+        get_logger=lambda: SimpleNamespace(
+            debug=lambda *_: None, info=lambda *_: None,
+            warning=lambda *_: None, error=lambda *_: None,
+        ),
         create_publisher=lambda *args, **kwargs: FakePublisher(),
     )
 
     manager = PublisherManager(fake_node)
     manager.publish_heartbeat()
 
-    assert published[-1].content == "deactivate"
+    assert published[-1].content == "running"
+    assert published[-1].task == "normal"
+
+    fake_node.battery_manager.is_recharging = True
+    manager.publish_heartbeat()
+
+    assert published[-1].content == "running"
+    assert published[-1].task == "recharging"

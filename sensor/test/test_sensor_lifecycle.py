@@ -32,7 +32,10 @@ def lifecycle_sensor(ros_context):
     import yaml
     from rclpy.parameter import Parameter
     from rclpy.executors import SingleThreadedExecutor
-    
+    from shared_components.test_components.node_setups import (
+        setup_effector_register_service,
+    )
+
     # Create a unique node name for each test to avoid conflicts
     import random
     random_suffix = str(random.randint(1000, 9999))
@@ -65,13 +68,18 @@ def lifecycle_sensor(ros_context):
             ros_params[key] = value[:-1]
     
     params = [Parameter(name=k, value=v) for k, v in ros_params.items()]
-    
+
+    # enable_adaptation: true makes RosComponent.__init__ block in register_with_effector() unless
+    # EffectorRegister is mocked before the Sensor is built (same helper as sensor/test/fixtures.py).
+    mock_effector_register = setup_effector_register_service()
+
     # Create node with a unique name to avoid conflicts
     sensor_name = f"lifecycle_test_node_{random_suffix}"
     node = Sensor(sensor_name, parameters=params)
-    
+
     # Set up executor
     executor = SingleThreadedExecutor()
+    executor.add_node(mock_effector_register)
     executor.add_node(mock_service_node)
     executor.add_node(node)
 
@@ -105,6 +113,7 @@ def lifecycle_sensor(ros_context):
             executor_thread.join(timeout=1.0)
             
         # Always destroy nodes
+        mock_effector_register.destroy_node()
         mock_service_node.destroy_node()
         node.destroy_node()
     except Exception as e:
@@ -119,14 +128,9 @@ def wait_for_messages(node, count=1, timeout=2.0):
     def sensor_data_callback(msg):
         received_messages.append(msg)
     
-    # Create subscription, using flexible topic name check
-    topic = None
-    if hasattr(node, 'config') and hasattr(node.config, 'sensor'):
-        topic = f"sensor_data/{node.config.sensor}"
-    elif hasattr(node, 'sensor'):
-        topic = f"sensor_data/{node.sensor}"
-    else:
-        topic = "sensor_data/thermometer"  # Default
+    # Production code (publishers.py) always publishes on
+    # sensor_data/{config.component} - config.sensor doesn't exist.
+    topic = f"sensor_data/{node.config.component}"
         
     sub = node.create_subscription(
         SensorData, topic, sensor_data_callback, 10
@@ -151,7 +155,7 @@ def test_configuration(lifecycle_sensor):
     
     # Test basic configuration
     assert hasattr(node, 'config')
-    assert node.config.sensor == "thermometer"
+    assert node.config.component == "thermometer"
     assert node.config.vital_sign == "temperature"
     assert hasattr(node, 'processor')
     assert hasattr(node, 'battery_manager')

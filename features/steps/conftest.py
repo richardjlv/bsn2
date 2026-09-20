@@ -1,35 +1,13 @@
-"""Session setup for the pytest-bdd scenarios in this directory - what
-behave's before_all/after_all did before the port, except this fixture does
-NOT launch or tear down the system under test itself; it only verifies it is
-already up before any scenario runs. Launch it yourself first for a direct
-`python3 -m pytest steps/...` run:
-
-    ros2 launch central_hub emergency_detection_launch.py
-
-This package's colcon-test path does this for you: each
-../test/test_*_bdd.py brings up its own launch file (via launch_testing)
-before running this directory's tests as a `pytest` subprocess - see
-../test/harness.py. Note that pytest.ini's `testpaths = test` keeps
-colcon's own collection out of this directory, so these files run only
-through those harnesses, never bare.
-
-One stack, one session: running more than one test_*.py file in the same
-pytest invocation (e.g. `pytest steps/`) makes them share
-whatever single system is already running. A scenario that permanently kills
-a node (see test_health_status.py's "the central hub is unable to process
-incoming readings") leaves it dead for whatever runs afterward in that same
-session - captures no longer hang forever waiting on it (utils/parsers.py's
-capture_topic_data has a timeout safety net), but they do run needlessly
-slow and their assertions will see the wrong (empty) data. Each
-launch_testing harness avoids this by running one file per `pytest`
-subprocess (a fresh launch each time); running files together here manually
-does not.
-"""
+"""Session setup for the pytest-bdd scenarios here: verifies the system under test is already up (it never
+launches it; for a direct run use `ros2 launch central_hub emergency_detection_launch.py`). Each
+../test/test_*_bdd.py launches its own stack (see ../test/harness.py); run one file per pytest session."""
 
 import os
+import re
 import subprocess
 import sys
 import time
+from contextlib import contextmanager
 from types import SimpleNamespace
 
 import pytest
@@ -53,7 +31,9 @@ LIFECYCLE_NODES = (
     "glucosemeter_node",
     "central_hub_node",
 )
-STARTUP_TIMEOUT_S = 30.0
+# 60s, not 30s: bsn_system polls with one `ros2 lifecycle get` subprocess per node, and running all
+# test_*_bdd.py back-to-back can outrun 30s under contention (same reasoning as test/harness.py).
+STARTUP_TIMEOUT_S = 60.0
 
 
 def _nodes_online(*node_names):
@@ -66,14 +46,9 @@ def _nodes_online(*node_names):
 
 
 def _kill_central_hub():
-    """Shared by every "hub is down" Given step (check_bsn.feature's "the
-    central hub is unavailable", health_status.feature's "...unable to
-    process incoming readings"): killing (not lifecycle-deactivating) is the
-    only reliable way to keep it down. LifecycleManager's ~5s auto-recovery
-    timer (shared_components/lifecycle_manager.py) isn't reset by a manual
-    deactivate and isn't exposed as a settable parameter, so a deactivated
-    hub can silently reactivate mid-scenario.
-    """
+    """Shared by every "hub is down" Given step: killing (not lifecycle-deactivating) is the only reliable
+    way to keep it down, since LifecycleManager's ~5s auto-recovery timer can silently reactivate a
+    deactivated hub."""
     # SIGKILL, not SIGTERM: emergency_detection doesn't die on SIGTERM at
     # all - rclpy only wires shutdown to SIGINT.
     subprocess.run(
@@ -102,6 +77,91 @@ def _kill_central_hub():
     )
 
 
+# Patient simulator node name, and the Markov state index of a vital sign's HighRisk1 range
+# (patient.py labels states 0 HighRisk0 ... 4 HighRisk1; 4 is "out of range").
+PATIENT_NODE = "patient_node"
+PATIENT_HIGH_RISK_STATE = 4
+PATIENT_NORMAL_STATE = 2
+_PARAM_ARRAY_RE = re.compile(r"\[(.*)\]")
+
+
+def _patient_transition_period(vital_sign):
+    """Seconds between the patient's transition attempts for `vital_sign`:
+    patient.py derives them from `<vital_sign>_Change` (gen_data only re-rolls
+    once 1/Change has accumulated past the initial Offset)."""
+    result = subprocess.run(
+        ["ros2", "param", "get", f"/{PATIENT_NODE}", f"{vital_sign}_Change"],
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=10,
+    )
+    match = re.search(r"([0-9]*\.?[0-9]+)\s*$", result.stdout.decode().strip())
+    assert match, (
+        f"Could not read {vital_sign}_Change from /{PATIENT_NODE}: "
+        f"{result.stdout.decode()!r} {result.stderr.decode()!r}"
+    )
+    return 1.0 / float(match.group(1))
+
+
+def _get_patient_transition_row(vital_sign, state):
+    """Current `<vital_sign>_State<state>` row, as a list of floats."""
+    result = subprocess.run(
+        ["ros2", "param", "get", f"/{PATIENT_NODE}", f"{vital_sign}_State{state}"],
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=10,
+    )
+    match = _PARAM_ARRAY_RE.search(result.stdout.decode())
+    assert match, (
+        f"Could not read {vital_sign}_State{state} from /{PATIENT_NODE}: "
+        f"{result.stdout.decode()!r} {result.stderr.decode()!r}"
+    )
+    return [float(v) for v in match.group(1).split(",")]
+
+
+def _set_patient_transition_row(vital_sign, state, probabilities):
+    """Overwrite one row of the patient simulator's Markov transition matrix.
+    patient.py re-reads `<vital_sign>_State<n>` on every transition attempt, so it takes effect
+    on the next attempt (every 1/`<vital_sign>_Change` s after the initial Offset)."""
+    value = "[" + ", ".join(str(float(p)) for p in probabilities) + "]"
+    result = subprocess.run(
+        ["ros2", "param", "set", f"/{PATIENT_NODE}", f"{vital_sign}_State{state}", value],
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=10,
+    )
+    assert b"Set parameter successful" in result.stdout, (
+        f"Failed to set {vital_sign}_State{state} on /{PATIENT_NODE} to {value}: "
+        f"{result.stdout.decode()!r} {result.stderr.decode()!r}"
+    )
+
+
+@contextmanager
+def patient_vital_pinned_to_high_risk(vital_sign):
+    """Pin the patient simulator in `vital_sign`'s HighRisk1 range for the block, then restore it.
+    Turns "reading outside its normal range" into a precondition (left alone it is ~0.4%/s);
+    only the patient's state is forced - sensor, risk score and hub fusion stay real."""
+    saved = {
+        state: _get_patient_transition_row(vital_sign, state)
+        for state in range(5)
+    }
+    # Rows the patient itself ignores (all zeros -> None in
+    # _gen_sensor_state_matrix) stay untouched throughout: writing one would
+    # enable a state whose risk range is [-1, -1] for this vital sign.
+    live_states = [state for state, row in saved.items() if any(row)]
+
+    def pin_to(target_state):
+        row = [0.0] * 5
+        row[target_state] = 1.0
+        for state in live_states:
+            _set_patient_transition_row(vital_sign, state, row)
+
+    try:
+        pin_to(PATIENT_HIGH_RISK_STATE)
+        yield
+    finally:
+        # Restoring the matrix alone would leave the simulator in the high-risk state (0.05/0.35 chance
+        # of leaving per attempt); walk it back to normal first (one attempt, p=1), then restore.
+        pin_to(PATIENT_NORMAL_STATE)
+        time.sleep(_patient_transition_period(vital_sign) + 1.5)
+        for state in live_states:
+            _set_patient_transition_row(vital_sign, state, saved[state])
+
+
 @pytest.fixture
 def bdd():
     """Per-scenario state, standing in for behave's `context`."""
@@ -117,31 +177,16 @@ def patient_monitored_by_sensor(sensor):
     _nodes_online(SENSORS[sensor]["node"], CENTRAL_HUB_NODE)
 
 
-# One wall-clock window for every topic this step captures. ~12 readings at
-# the sensors' 1 Hz baseline (sensor/config/*.yaml), and ~72 central-hub
-# samples at its 6 Hz - plenty of overlap for a value published by the sensor
-# to also appear in the hub's stream.
+# One wall-clock window for every topic this step captures: ~12 sensor readings (1 Hz) and ~72 hub
+# samples (6 Hz), enough overlap for a published value to appear in the hub's stream.
 SENSOR_READING_CAPTURE_S = 12.0
 
 
 @when(parsers.parse("{sensor} reports a new vital sign reading"))
 def sensor_reports_reading(bdd, sensor):
-    # Shared across every *.feature file that uses this exact phrasing -
-    # including /persist so any scenario needing persistence (see
-    # test_data_persistance.py) gets it for free. Also reused by sad-path
-    # scenarios where the hub never publishes back.
-    #
-    # Wall-clock window, not a per-topic line count: the sensor (~1 Hz) and
-    # the hub (6 Hz) publish at very different rates, so a line count closes
-    # each topic's window at a different moment - the hub's could close
-    # before the sensor even produced the value it would echo. This is what
-    # broke check_bsn.feature's first Examples row before this fix.
-    #
-    # /persist is filtered to this sensor's own records (it's fed by every
-    # sensor plus every node's Status/Event chatter, so unfiltered it drowns
-    # this sensor's rows in noise). The filter matches the ROS2 *node* name -
-    # what logger.py copies into Persist.source - not the config key, which
-    # never appears there.
+    # Shared by every *.feature with this phrasing (also captures /persist; reused by sad-path scenarios).
+    # Wall-clock window, not a per-topic line count: sensor (1 Hz) and hub (6 Hz) rates differ too much.
+    # /persist is filtered to this sensor by ROS2 *node* name (what logger.py copies into Persist.source).
     capture_topic_data_with_timeout(
         bdd,
         [_sensor_topic(sensor), TARGET_SYSTEM_TOPIC, PERSIST_TOPIC],
@@ -151,10 +196,8 @@ def sensor_reports_reading(bdd, sensor):
 
 
 def pytest_configure(config):
-    # Registers check_bsn.feature's and health_status.feature's tags as
-    # pytest markers to silence "Unknown pytest.mark.X". Done here rather
-    # than pytest.ini/setup.cfg so it applies regardless of which directory
-    # pytest is invoked from.
+    # Registers check_bsn.feature's and health_status.feature's tags as pytest markers (silences
+    # "Unknown pytest.mark.X"); done here, not in pytest.ini, so it applies from any invocation directory.
     for marker in (
         "behavior", "bsn-p08", "bsn-p09", "bsn-p10", "bsn-p03", "sad-path", "persistence", "timing",
         "topology", "patient-simulator", "contract", "g4-g5", "logging",
@@ -168,10 +211,8 @@ def pytest_configure(config):
 
 @pytest.fixture(scope="session", autouse=True)
 def bsn_system():
-    """Verifies the system under test is already running and active -
-    launching and tearing it down is someone else's job now (see this
-    module's docstring), so there is nothing to start or kill here.
-    """
+    """Verifies the system under test is already running and active; launching and tearing it down
+    is the harness's job (see this module's docstring)."""
     # Poll for 'active' instead of a blind sleep - usually faster, and gives
     # a precise, actionable failure if nothing was launched at all.
     deadline = time.time() + STARTUP_TIMEOUT_S

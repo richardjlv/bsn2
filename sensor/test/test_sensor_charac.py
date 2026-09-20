@@ -1,170 +1,69 @@
 import pytest
-import yaml
-import os
 import time
-import threading
-from contextlib import suppress
-from ament_index_python.packages import get_package_share_directory
-from rclpy.parameter import Parameter
 from bsn_interfaces.msg import SensorData
-from bsn_interfaces.srv import PatientData
 import rclpy
-from sensor.sensor import Sensor
-from rclpy.node import Node
-from rclpy.executors import ExternalShutdownException
+from shared_components.test_components.test_utilities import (
+    ExecutorThread,
+    ensure_ros_init,
+    wait_for_service_registration,
+    shutdown_ros_init,
+)
+from shared_components.test_components.node_setups import (
+    setup_lifecycle_sensor_node,
+    setup_effector_register_service,
+)
 
 
 @pytest.fixture(scope="class")
 def sensor_node(request):
-    """Create a sensor node for testing."""
-    # Initialize ROS
-    rclpy.init()
+    """Create a sensor node (thermometer) for testing.
+    Reuses setup_lifecycle_sensor_node()/setup_effector_register_service() (as fixtures.py does);
+    without the EffectorRegister mock the node hangs in register_with_effector()."""
+    ensure_ros_init()
+    mock_effector_register = setup_effector_register_service()
+    node, mock_service_node = setup_lifecycle_sensor_node()
 
-    # Create a separate node for the mock service
-    mock_service_node = Node("mock_service_provider")
+    threads = ExecutorThread([mock_effector_register, mock_service_node, node])
+    threads.run()
 
-    def mock_patient_service(req, res):
-        mock_service_node.get_logger().info(f"Mock service called for {req.vital_sign}")
-        res.datapoint = 37.0
-        return res
-
-    test_service = mock_service_node.create_service(
-        PatientData, "get_sensor_reading", mock_patient_service
-    )
-
-    # We need to spin the mock service node to handle requests
-    executor = rclpy.executors.SingleThreadedExecutor()
-    executor.add_node(mock_service_node)
-
-    # Start executor in a separate thread
-    def spin_executor():
-        with suppress(ExternalShutdownException, RuntimeError):
-            executor.spin()
-
-    executor_thread = threading.Thread(target=spin_executor, daemon=True)
-    executor_thread.start()
-
-    # Load params from YAML file - we'll use thermometer for testing
-    params_path = os.path.join(
-        get_package_share_directory("sensor"), "config", "thermometer.yaml"
-    )
-    with open(params_path, "r") as f:
-        full_params = yaml.safe_load(f)
-
-    # Prepare parameters
-    ros_params = full_params["thermometer_node"]["ros__parameters"]
-    params = [Parameter(name=k, value=v) for k, v in ros_params.items()]
-    
-    # Log the parameters we're using
-    print("\nUsing parameters:")
-    for p in params:
-        print(f"  {p.name}: {p.value}")
-
-    # Create node with a custom name to avoid conflicts
-    node = Sensor("thermometer_test_node", parameters=params)
     node.get_logger().set_level(rclpy.logging.LoggingSeverity.DEBUG)
 
-    # Log basic information without using get_parameter_names()
-    node.get_logger().info("Node created, attempting configuration...")
-
-    # Try configuration and capture the result
     try:
-        # IMPORTANT: Properly configure node and log details
         result = node.trigger_configure()
-        node.get_logger().info(f"Configuration result: {result.value}")
-
-        # Check if configuration was successful without asserting yet
-        if result.value != 1:
-            node.get_logger().error(f"Configuration failed with result {result}")
-        else:
-            node.get_logger().info("Configuration successful")
-            
-            # Activate the node if configuration was successful
+        if result.value == 1:
             act_result = node.trigger_activate()
             if act_result.value != 1:
                 node.get_logger().error(f"Activation failed with result {act_result}")
-            else:
-                node.get_logger().info("Activation successful")
-
-        # Add the node to executor regardless
-        executor.add_node(node)
+        else:
+            node.get_logger().error(f"Configuration failed with result {result}")
     except Exception as e:
         node.get_logger().error(f"Exception during configuration: {e}")
-        # Continue with setup to see what else might be wrong
 
     # Create a subscription to capture published data
     request.cls.received_messages = []
 
     def sensor_data_callback(msg):
-        node.get_logger().info(f"Received message: {msg.sensor_datapoint}")
         request.cls.received_messages.append(msg)
 
-    # Create subscription - try to handle both component and non-component versions
-    try:
-        topic = None
-        # Try component-based architecture first
-        if hasattr(node, 'config') and hasattr(node.config, 'sensor'):
-            topic = f"sensor_data/{node.config.sensor}"
-        # Fall back to direct attribute
-        elif hasattr(node, 'sensor'):
-            topic = f"sensor_data/{node.sensor}"
-        else:
-            # Default if neither is found
-            topic = "sensor_data/thermometer"
-            
-        sub = node.create_subscription(SensorData, topic, sensor_data_callback, 10)
-        node.get_logger().info(f"Created subscription to topic: {topic}")
-    except Exception as e:
-        node.get_logger().error(f"Failed to create subscription: {e}")
-        sub = None
+    # Production code (publishers.py) always publishes on
+    # sensor_data/{config.component} - config.sensor doesn't exist despite
+    # ConfigManager's docstring example claiming it does.
+    topic = f"sensor_data/{node.config.component}"
+    node.create_subscription(SensorData, topic, sensor_data_callback, 10)
 
-    # Store node, service, and subscription in class
     request.cls.sensor_node = node
     request.cls.mock_service_node = mock_service_node
-    request.cls.test_service = test_service
-    request.cls.test_sub = sub
-    request.cls.executor = executor
-    request.cls.executor_thread = executor_thread
-    
-    # Make sure the service can be discovered before proceeding
-    time.sleep(1.0)  # Give time for service registration
+
+    wait_for_service_registration(0.5)
 
     yield node
 
-    # IMPORTANT: Properly deactivate and cleanup the node
     try:
-        # Check state before attempting transitions
-        state = node.get_current_state().label
-        node.get_logger().info(f"Current state before teardown: {state}")
-        
-        # Only try to deactivate if in active state
-        if state == "active":
-            try:
-                node.trigger_deactivate()
-                time.sleep(0.1)
-            except Exception as e:
-                node.get_logger().warn(f"Deactivation failed: {e}")
-        
-        # Only try to cleanup if in inactive state 
-        current_state = node.get_current_state().label
-        if current_state == "inactive":
-            try:
-                node.trigger_cleanup()
-                time.sleep(0.1)
-            except Exception as e:
-                node.get_logger().warn(f"Cleanup failed: {e}")
-        
-        # Always do these cleanup steps
-        executor.shutdown()
-        if executor_thread.is_alive():
-            executor_thread.join(timeout=2.0)
-        
-        mock_service_node.destroy_node()
-        node.destroy_node()
+        threads.clean_up()
     except Exception as e:
-        node.get_logger().error(f"Exception during teardown: {e}")
+        print(f"Error during sensor cleanup: {e}")
     finally:
-        rclpy.shutdown()
+        shutdown_ros_init()
 
 
 @pytest.mark.usefixtures("sensor_node")
@@ -280,7 +179,7 @@ class TestSensorBehavior:
 
         # Verify message fields
         msg = self.received_messages[-1]
-        assert msg.sensor_type == self.sensor_node.config.sensor
+        assert msg.sensor_type == self.sensor_node.config.component
         assert msg.sensor_datapoint == 37.0
         assert isinstance(msg.risk, float)
         assert msg.risk_level in ["low", "moderate", "high", "unknown"]
@@ -289,7 +188,7 @@ class TestSensorBehavior:
         """Test risk evaluation for values in low risk range"""
         # UPDATED for component structure
         # Get the low risk range from sensor
-        ranges = self.sensor_node.risk_manager.evaluator.sensor_ranges[self.sensor_node.config.sensor]
+        ranges = self.sensor_node.risk_manager.evaluator.sensor_ranges[self.sensor_node.config.component]
         low_range = ranges["low_risk"]
 
         # Create a value in the middle of low risk range
@@ -307,7 +206,7 @@ class TestSensorBehavior:
         """Test risk evaluation for values in medium risk range"""
         # UPDATED for component structure
         # Get the medium risk range from sensor
-        ranges = self.sensor_node.risk_manager.evaluator.sensor_ranges[self.sensor_node.config.sensor]
+        ranges = self.sensor_node.risk_manager.evaluator.sensor_ranges[self.sensor_node.config.component]
         mid_range = ranges["mid_risk1"]  # Use mid_risk1 as an example
 
         # Create a value in the middle of medium risk range
@@ -325,7 +224,7 @@ class TestSensorBehavior:
         """Test risk evaluation for values in high risk range"""
         # UPDATED for component structure
         # Get the high risk range from sensor
-        ranges = self.sensor_node.risk_manager.evaluator.sensor_ranges[self.sensor_node.config.sensor]
+        ranges = self.sensor_node.risk_manager.evaluator.sensor_ranges[self.sensor_node.config.component]
         high_range = ranges["high_risk1"]  # Use high_risk1 as an example
 
         # Create a value in the middle of high risk range
@@ -368,7 +267,7 @@ class TestSensorBehavior:
 
         # Verify message content
         msg = self.received_messages[-1]
-        assert msg.sensor_type == self.sensor_node.config.sensor
+        assert msg.sensor_type == self.sensor_node.config.component
         assert abs(msg.sensor_datapoint - 37.0) < 0.001
         assert msg.risk >= 0.0
         assert msg.risk_level in ["low", "moderate", "high", "unknown"]
@@ -442,7 +341,7 @@ class TestSensorBehavior:
         """Test risk evaluation at edge cases of ranges"""
         # UPDATED for component structure
         # Get a sensor type to test
-        sensor_type = self.sensor_node.config.sensor
+        sensor_type = self.sensor_node.config.component
         evaluator = self.sensor_node.risk_manager.evaluator
         ranges = evaluator.sensor_ranges[sensor_type]
         
@@ -468,7 +367,7 @@ class TestSensorBehavior:
         """Test configuring custom risk percentages"""
         # UPDATED for component structure
         evaluator = self.sensor_node.risk_manager.evaluator
-        sensor_type = self.sensor_node.config.sensor
+        sensor_type = self.sensor_node.config.component
 
         # Save original percentages
         original_low = evaluator.low_percentage

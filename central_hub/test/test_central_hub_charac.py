@@ -1,6 +1,8 @@
 import pytest
 import time
+import threading
 import rclpy
+from rclpy.executors import SingleThreadedExecutor
 from rclpy.qos import QoSProfile, QoSReliabilityPolicy, QoSHistoryPolicy
 from bsn_interfaces.msg import SensorData, TargetSystemData
 from std_msgs.msg import Header
@@ -33,9 +35,10 @@ def ros_context():
 def central_hub_node(request, ros_context):
     """Create a central hub node for testing."""
     from central_hub.central_hub import CentralHub
+    from fixtures import _central_hub_params
 
     # Create node and assign to class
-    node = CentralHub()
+    node = CentralHub(node_name="central_hub_node", parameters=_central_hub_params())
     node.get_logger().set_level(rclpy.logging.LoggingSeverity.DEBUG)
     
     # Create a separate executor for this node
@@ -988,8 +991,15 @@ class TestCentralHubBehaviorAdditional(_CentralHubSensorPublisherMixin):
 
     def test_hub_parameter_handling(self):
         """Test hub's parameter handling"""
+        # Skipped: assumes a generic config API (get_param/set_param/params) that ConfigManagerBase
+        # doesn't implement; it exposes typed attributes (self.frequency, ...) and the manager is
+        # `node.config`, not `config_manager`.
         if not hasattr(self.central_hub, 'config_manager'):
-            pytest.skip("Config manager not found")
+            pytest.skip(
+                "CentralHub exposes its ConfigManager as `.config` with typed "
+                "attributes, not `.config_manager` with a generic "
+                "get_param/set_param/params API; nothing to test here."
+            )
 
         # Get original parameters
         original_params = {}

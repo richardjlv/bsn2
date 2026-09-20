@@ -23,13 +23,9 @@ def is_valid_percentage(values):
 
 
 def any_high_risk_percentage(values):
-    """True if at least one item in `values` parses as a number in the
-    high-risk band (66-100) shared by every sensor's risk-percentage config
-    (see e.g. sensor/config/oximeter.yaml's highrisk_percent). Checks for
-    *any* match rather than requiring every value to qualify, unlike
-    is_valid_percentage - callers capture a window of readings where only
-    some are expected to land in the high-risk band.
-    """
+    """True if at least one item in `values` parses as a number in the high-risk band (66-100).
+    Any match, not every value (unlike is_valid_percentage); stricter than ROS1's `risk > 10` because
+    check_bsn.feature drives the patient into HighRisk1 (conftest.patient_vital_pinned_to_high_risk)."""
     try:
         return any(66.0 <= float(v) <= 100.0 for v in values)
     except (TypeError, ValueError):

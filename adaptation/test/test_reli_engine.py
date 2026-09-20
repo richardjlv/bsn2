@@ -374,10 +374,8 @@ class TestReliabilityEngine:
             # Call plan
             self.reli_engine_node.plan()
 
-            # Should have filtered components correctly
-            # R_G3_T1_1 should be included (CTX=1, F=1, not deactivated)
-            # R_G3_T1_2 should be excluded (CTX=0)
-            # R_G4_T1 should be excluded (deactivated)
+            # Should have filtered components: R_G3_T1_1 included (CTX=1, F=1, active);
+            # R_G3_T1_2 excluded (CTX=0); R_G4_T1 excluded (deactivated)
 
     def test_plan_priority_ordering_matches_bsn1(self):
         """Test plan priority ordering matches BSN1 ReliabilityEngine.cpp"""
@@ -403,10 +401,11 @@ class TestReliabilityEngine:
 
         self.reli_engine_node.deactivated_components = {}
 
-        # Mock calculate_qos to return convergent solution
-        qos_values = [0.82, 0.85, 0.90]  # Sequence that converges
+        # Constant return_value: plan() now calls calculate_qos many times per run (coordinate
+        # descent), so a finite side_effect list would raise StopIteration. This test only needs
+        # plan() to find a solution within tolerance and call execute().
         with patch.object(
-            self.reli_engine_node, "calculate_qos", side_effect=qos_values
+            self.reli_engine_node, "calculate_qos", return_value=0.9
         ) as mock_calc, patch.object(self.reli_engine_node, "execute") as mock_execute:
 
             self.reli_engine_node.setpoint = 0.9
@@ -465,9 +464,7 @@ class TestReliabilityEngine:
         published_msg = self.reli_engine_node.strategy_publisher.publish.call_args[0][0]
         content = published_msg.content
 
-        # Check component name conversion (matching BSN1 logic)
-        # R_G3_T1_1 -> /g3t1_1
-        # R_G4_T1 -> /g4t1
+        # Component name conversion (BSN1 logic): R_G3_T1_1 -> /g3t1_1, R_G4_T1 -> /g4t1,
         # R_G5_T2_3 -> /g5t2_3
         expected_components = ["/g3t1_1", "/g3t1_2", "/g4t1", "/g5t2_3"]
         for component in expected_components:

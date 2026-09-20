@@ -1,14 +1,6 @@
 """launch_testing harness for ../steps/test_managing_system.py.
-
-Brings up the same stack as steps/conftest.py's `bsn_system`
-fixture (central_hub's emergency_detection_launch.py) - that's enough for
-`logger` and `node_monitor`, the two plain nodes this file's one *passing*
-scenario needs. All 9 of managing_system.feature's scenarios have step
-implementations; 8 are expected (`xfail`) to fail since `/enactor`,
-`/reli_engine` and `/data_access` don't exist in this ROS2 port - see
-../features/MANAGING_SYSTEM_GAPS.md for the full breakdown, and
-harness.py's module docstring for the launch/skip contract this relies on.
-"""
+Same stack as conftest.py's `bsn_system`; `/enactor`, `/reli_engine` and `/data_access` are checked too,
+so a node dying on startup fails here. Current xfails: ../MANAGING_SYSTEM_GAPS.md; contract: harness.py."""
 
 import os
 import unittest
@@ -24,7 +16,7 @@ LIFECYCLE_NODES = (
     "thermometer_node", "oximeter_node", "ecg_node",
     "abps_node", "abpd_node", "glucosemeter_node", "central_hub_node",
 )
-PLAIN_NODES = ("logger", "node_monitor")
+PLAIN_NODES = ("logger", "node_monitor", "enactor", "reli_engine", "data_access")
 
 
 @pytest.mark.launch_test
