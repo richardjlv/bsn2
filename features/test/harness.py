@@ -91,6 +91,11 @@ def _wait_for_lifecycle_services(node_names, timeout_s):
                         pending.discard(name)
                     del futures[name]
             executor.spin_once(timeout_sec=0.1)
+            # A response can already be queued, in which case spin_once
+            # returns immediately.  Keep a bounded probe cadence for nodes
+            # that are still configuring instead of issuing service calls in
+            # a tight loop and perturbing the startup being observed.
+            time.sleep(0.1)
         for name in pending:
             _trace_readiness(name, deadline - timeout_s)
         return pending
