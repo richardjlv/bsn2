@@ -4,6 +4,7 @@ installed package): pytest puts this directory on sys.path, so `import harness` 
 
 import os
 import json
+import signal
 import subprocess
 import sys
 import time
@@ -11,6 +12,30 @@ from pathlib import Path
 
 # The package root: the features/ directory itself (specs at the top level, steps in steps/, harnesses in test/).
 FEATURES_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+
+def _run_ros_cli(command, timeout):
+    """Run a ROS CLI command and enforce its timeout for child processes too.
+
+    Some ROS CLI calls start descendants that inherit stdout/stderr.  Killing
+    only the direct client lets those descendants keep ``communicate`` open,
+    which defeats ``subprocess.run(timeout=...)`` and blocks readiness for far
+    longer than its contract.  A separate process group lets the timeout end
+    the complete CLI invocation.
+    """
+    process = subprocess.Popen(
+        command,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        start_new_session=True,
+    )
+    try:
+        stdout, stderr = process.communicate(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        os.killpg(process.pid, signal.SIGKILL)
+        process.communicate()
+        raise
+    return subprocess.CompletedProcess(command, process.returncode, stdout, stderr)
 
 
 def _trace_readiness(node, started, result=None, state=None):
@@ -87,12 +112,7 @@ def wait_for_lifecycle_active(node_names, timeout_s=60.0):
         for name in list(pending):
             started = time.monotonic()
             try:
-                result = subprocess.run(
-                    ["ros2", "lifecycle", "get", name],
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.PIPE,
-                    timeout=5,
-                )
+                result = _run_ros_cli(["ros2", "lifecycle", "get", name], timeout=5)
             except subprocess.TimeoutExpired:
                 # Slow service call, not a dead node - retry.
                 _trace_readiness(name, started)
