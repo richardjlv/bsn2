@@ -6,6 +6,25 @@ import select
 import time
 from utils.constants import SENSOR_TOPICS, NON_SENSOR_TOPICS
 
+
+def _stop_capture_process(process):
+    """Stop a ``ros2 topic echo`` process without invalidating the capture timeout.
+
+    The command-line client can keep its pipes open briefly after SIGTERM.  A
+    bare ``wait()`` then turns a deliberately bounded capture into an
+    unbounded test step.  Escalating to SIGKILL keeps the caller's observation
+    window meaningful while preserving all data already read from stdout.
+    """
+    if process.poll() is not None:
+        return
+    process.terminate()
+    try:
+        process.wait(timeout=1.0)
+    except subprocess.TimeoutExpired:
+        process.kill()
+        process.wait(timeout=1.0)
+
+
 def format_entity(raw_string):
     # Check if any words in the string start with an uppercase letter
     words = raw_string.split()
@@ -208,8 +227,7 @@ def capture_csv_data(topic, line_limit=10, timeout=15.0, filter_expr=None):
     except Exception as e:
         print(f"Error capturing data from {topic}: {e}")
     finally:
-        process.terminate()
-        process.wait()
+        _stop_capture_process(process)
 
     return output
 
@@ -303,8 +321,7 @@ def capture_csv_data_with_timeout(topic, timeout=3.0, filter_expr=None):
                 for key, value in zip(output.keys(), values):
                     output[key].append(value)
     finally:
-        process.terminate()
-        process.wait()
+        _stop_capture_process(process)
 
     return output
 

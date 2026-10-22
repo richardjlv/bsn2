@@ -36,13 +36,34 @@ LIFECYCLE_NODES = (
 STARTUP_TIMEOUT_S = 60.0
 
 
-def _nodes_online(*node_names):
-    result = subprocess.run(
-        ["ros2", "node", "list"], stdout=subprocess.PIPE, stderr=subprocess.PIPE
-    )
-    node_list = result.stdout.decode("utf-8").splitlines()
-    for name in node_names:
-        assert f"/{name}" in node_list, f"Node /{name} is not online"
+def _nodes_online(*node_names, timeout_s=5.0):
+    """Wait briefly for a consistent DDS graph observation.
+
+    A newly created ``ros2 node list`` participant may miss an already-active
+    node during discovery.  The precondition remains the same (every node
+    must be visible); retrying avoids treating one transient graph snapshot as
+    evidence that the component is unavailable.
+    """
+    expected = {f"/{name}" for name in node_names}
+    deadline = time.monotonic() + timeout_s
+    observed = set()
+    while True:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            missing = ", ".join(sorted(expected - observed))
+            assert not missing, f"Node(s) not online after {timeout_s:.1f}s: {missing}"
+            return
+        try:
+            result = subprocess.run(
+                ["ros2", "node", "list"], stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE, timeout=min(remaining, 5.0),
+            )
+        except subprocess.TimeoutExpired:
+            continue
+        observed = set(result.stdout.decode("utf-8").splitlines())
+        if expected.issubset(observed):
+            return
+        time.sleep(min(0.2, max(0.0, deadline - time.monotonic())))
 
 
 def _kill_central_hub():
