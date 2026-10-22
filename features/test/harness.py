@@ -130,13 +130,25 @@ def wait_for_lifecycle_active(node_names, timeout_s=60.0):
     return pending
 
 
-def nodes_online(*node_names):
-    """Names (without leading '/') still missing from `ros2 node list`."""
-    result = subprocess.run(
-        ["ros2", "node", "list"], stdout=subprocess.PIPE, stderr=subprocess.PIPE
-    )
-    node_list = result.stdout.decode("utf-8").splitlines()
-    return [name for name in node_names if f"/{name}" not in node_list]
+def nodes_online(*node_names, timeout_s=10.0):
+    """Names still absent from the graph after its discovery window.
+
+    Lifecycle activation and DDS graph discovery are independent.  Retrying
+    avoids treating a just-started plain node as unavailable merely because a
+    single ``ros2 node list`` query arrived before its discovery update.
+    """
+    pending = set(node_names)
+    deadline = time.monotonic() + timeout_s
+    while pending and time.monotonic() < deadline:
+        try:
+            result = _run_ros_cli(["ros2", "node", "list"], timeout=5)
+        except subprocess.TimeoutExpired:
+            continue
+        node_list = result.stdout.decode("utf-8").splitlines()
+        pending = {name for name in pending if f"/{name}" not in node_list}
+        if pending:
+            time.sleep(0.5)
+    return [name for name in node_names if name in pending]
 
 
 def wait_for_topic_subscribers(topic_names, timeout_s=30.0):
