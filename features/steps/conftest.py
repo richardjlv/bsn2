@@ -35,6 +35,32 @@ LIFECYCLE_NODES = (
 # test_*_bdd.py back-to-back can outrun 30s under contention (same reasoning as test/harness.py).
 STARTUP_TIMEOUT_S = 60.0
 
+_graph_node = None
+_graph_context = None
+
+
+def _direct_graph_node():
+    global _graph_node, _graph_context
+    if _graph_node is None:
+        import rclpy
+        from rclpy.context import Context
+        from rclpy.node import Node
+        _graph_context = Context()
+        rclpy.init(args=[], context=_graph_context)
+        _graph_node = Node("bdd_graph_probe", context=_graph_context)
+    return _graph_node
+
+
+@pytest.fixture(scope="session", autouse=True)
+def graph_probe_lifetime():
+    yield
+    global _graph_node, _graph_context
+    if _graph_node is not None:
+        _graph_node.destroy_node()
+        if _graph_context.ok():
+            _graph_context.shutdown()
+        _graph_node = _graph_context = None
+
 
 def _nodes_online(*node_names, timeout_s=5.0):
     """Wait briefly for a consistent DDS graph observation.
@@ -53,14 +79,20 @@ def _nodes_online(*node_names, timeout_s=5.0):
             missing = ", ".join(sorted(expected - observed))
             assert not missing, f"Node(s) not online after {timeout_s:.1f}s: {missing}"
             return
-        try:
-            result = subprocess.run(
-                ["ros2", "node", "list"], stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE, timeout=min(remaining, 5.0),
-            )
-        except subprocess.TimeoutExpired:
-            continue
-        observed = set(result.stdout.decode("utf-8").splitlines())
+        if os.environ.get("BSN_TRACE_DIRECT_READINESS") == "1":
+            observed = {
+                namespace.rstrip("/") + "/" + name
+                for name, namespace in _direct_graph_node().get_node_names_and_namespaces()
+            }
+        else:
+            try:
+                result = subprocess.run(
+                    ["ros2", "node", "list"], stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE, timeout=min(remaining, 5.0),
+                )
+            except subprocess.TimeoutExpired:
+                continue
+            observed = set(result.stdout.decode("utf-8").splitlines())
         if expected.issubset(observed):
             return
         time.sleep(min(0.2, max(0.0, deadline - time.monotonic())))

@@ -14,7 +14,7 @@ import rclpy
 from pytest_bdd import given, parsers, scenarios, then, when
 from rclpy.node import Node
 
-from conftest import LOGGER_NODE, SENSORS, _nodes_online  # noqa: E402
+from conftest import LOGGER_NODE, SENSORS, _nodes_online, _direct_graph_node  # noqa: E402
 
 FEATURES_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 sys.path.insert(0, os.path.join(FEATURES_DIR, "steps"))
@@ -53,11 +53,17 @@ XFAIL_REASON_BY_SCENARIO = {
         CONTROLLER_NEVER_SILENT_REASON,
 }
 
+
+class BehaviorExpectationNotMet(AssertionError):
+    """Only documented Then failures may be classified as expected failures."""
+
+
 for _test_name, _test_func in list(globals().items()):
     _scenario = getattr(_test_func, "__scenario__", None)
     _reason = XFAIL_REASON_BY_SCENARIO.get(getattr(_scenario, "name", None))
     if _reason is not None:
-        globals()[_test_name] = pytest.mark.xfail(reason=_reason)(_test_func)
+        globals()[_test_name] = pytest.mark.xfail(
+            reason=_reason, raises=BehaviorExpectationNotMet)(_test_func)
 del _test_name, _test_func, _scenario, _reason
 
 
@@ -65,6 +71,17 @@ def _node_info(node_name):
     """ros2 node info for `node_name`, parsed into publishers/subscribers/services
     (utils.parsers.get_rosnode_info_ros2). Duplicated across test_*.py files because each runs as its own
     pytest subprocess."""
+    if os.environ.get("BSN_TRACE_DIRECT_READINESS") == "1":
+        _nodes_online(node_name)
+        graph = _direct_graph_node()
+        namespace, _, name = ("/" + node_name.strip("/")).rpartition("/")
+        namespace = namespace or "/"
+        return {
+            "publishers": [{"topic": topic, "types": types} for topic, types in
+                           graph.get_publisher_names_and_types_by_node(name, namespace)],
+            "subscribers": [{"topic": topic, "types": types} for topic, types in
+                            graph.get_subscriber_names_and_types_by_node(name, namespace)],
+        }
     result = subprocess.run(
         ["ros2", "node", "info", f"/{node_name}"],
         stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=5,
@@ -532,12 +549,12 @@ def adaptation_command_reducing_rate_issued(bdd, sensor, adaptation_log, persist
         "before recovery"
     )
     freq = adaptation_log.wait_for_below(bdd.peak_frequency_hz, bdd.since_index)
-    assert freq is not None, (
-        f"No AdaptationCommand with freq < {bdd.peak_frequency_hz:.3f}Hz "
-        f"(the measured peak) arrived on {reconfigure_topic(sensor)} in "
-        f"{ADAPTATION_WAIT_S}s after {sensor}'s reliability recovered - see "
-        f"../MANAGING_SYSTEM_GAPS.md's runtime-breakage section"
-    )
+    if freq is None:
+        raise BehaviorExpectationNotMet(
+            f"No AdaptationCommand with freq < {bdd.peak_frequency_hz:.3f}Hz "
+            f"(the measured peak) arrived on {reconfigure_topic(sensor)} in "
+            f"{ADAPTATION_WAIT_S}s after {sensor}'s reliability recovered - see "
+            f"../MANAGING_SYSTEM_GAPS.md's runtime-breakage section")
     _assert_adaptation_logged(bdd, sensor, persist_log)
 
 
@@ -554,10 +571,10 @@ def no_adaptation_command_issued(bdd, sensor, adaptation_log):
     # Meant to stay `xfail` (CONTROLLER_NEVER_SILENT_REASON): the controller is never silent, as in legacy ROS1;
     # do not "fix" this assertion or the controller to make it pass. Keep the Given (nodes online) as is.
     silent = adaptation_log.wait_for_none(bdd.since_index, timeout=5.0)
-    assert silent, (
-        f"Unexpected AdaptationCommand(s) on {reconfigure_topic(sensor)} "
-        f"while reliability was supposedly stable"
-    )
+    if not silent:
+        raise BehaviorExpectationNotMet(
+            f"Unexpected AdaptationCommand(s) on {reconfigure_topic(sensor)} "
+            f"while reliability was supposedly stable")
 
 
 # "A failed adaptation attempt is recorded in the system log": steps mirror ROS1's given_cannot_receive_adaptation /
