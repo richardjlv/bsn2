@@ -353,6 +353,24 @@ class _PersistLog:
         with self._lock:
             return len(self._records)
 
+    def publish_adaptation(self, message):
+        """Publish the test stimulus through the existing ROS participant.
+
+        A fresh instrumented CLI process may time out before publishing. DDS
+        discovery is still required, and the Then still checks the real record.
+        """
+        publisher = self._node.create_publisher(AdaptationCommand, LOG_ADAPT_TOPIC, 10)
+        try:
+            deadline = time.monotonic() + 5.0
+            while publisher.get_subscription_count() == 0 and time.monotonic() < deadline:
+                time.sleep(0.05)
+            assert publisher.get_subscription_count() > 0, "No subscriber for /log_adapt stimulus"
+            for _ in range(5):
+                publisher.publish(message)
+                time.sleep(0.3)
+        finally:
+            self._node.destroy_publisher(publisher)
+
     def wait_for_record(self, target, msg_type, since_index, timeout=10.0, source=None):
         """Mirrors ROS1's _wait_for_persist_record: the first record after `since_index` matching
         `target`/`msg_type` (and `source`, if given), polling instead of re-capturing a window. Pass `source`
@@ -568,19 +586,15 @@ def sensor_cannot_receive_adaptation_commands(bdd, sensor, persist_log):
 
 
 @when(parsers.parse("an adaptation command is issued for {sensor}"))
-def adaptation_command_issued_for_sensor(sensor):
-    """Mirrors ROS1's when_adaptation_issued: publishes straight to log_adapt (the enactor's channel), with the BSN
-    target, impersonating the enactor. Publishes a few times, not `--once`: a fresh `ros2 topic pub` may lose the
-    discovery race and drop its only message; the Then polls for up to 10s, so redundant deliveries are harmless."""
+def adaptation_command_issued_for_sensor(sensor, persist_log):
+    """Publish the same synthetic command through a persistent ROS participant.
+
+    The BSN target and synthetic source remain explicit. Five publications follow
+    DDS discovery; the Then still requires the matching real /persist record.
+    """
     sensor_bsn = SENSORS[sensor]["bsn"]
-    msg_yaml = f"{{source: '/enactor', target: '{sensor_bsn}', action: 'freq=5.0'}}"
-    for _ in range(5):
-        subprocess.run(
-            ["ros2", "topic", "pub", "--once", LOG_ADAPT_TOPIC,
-             "bsn_interfaces/msg/AdaptationCommand", msg_yaml],
-            stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=5,
-        )
-        time.sleep(0.3)
+    message = AdaptationCommand(source="/enactor", target=sensor_bsn, action="freq=5.0")
+    persist_log.publish_adaptation(message)
 
 
 @then(parsers.parse("the adaptation command should be recorded in the system log even though {sensor} cannot receive it"))
