@@ -421,6 +421,23 @@ def _set_effector_connection(component_name, connected, timeout=10.0):
     """Calls the EffectorRegister service (as Component.setUp/AdaptationHandler do) to (un)register in
     ParamAdapter.registered_components; mirrors ROS1's `_set_effector_connection`. `component_name` is the
     ROS2 node name without a leading slash."""
+    if os.environ.get("BSN_TRACE_DIRECT_READINESS") == "1":
+        from bsn_interfaces.srv import EffectorRegister
+        probe = _direct_graph_node()
+        client = probe.create_client(EffectorRegister, "/EffectorRegister")
+        deadline = time.monotonic() + timeout
+        try:
+            if not client.wait_for_service(timeout_sec=max(0.0, deadline - time.monotonic())):
+                raise TimeoutError("EffectorRegister service unavailable")
+            future = client.call_async(EffectorRegister.Request(
+                name=component_name, connection=bool(connected)))
+            rclpy.spin_until_future_complete(
+                probe, future, timeout_sec=max(0.0, deadline - time.monotonic()))
+            if not future.done():
+                raise TimeoutError("EffectorRegister response timeout")
+            return future.result().ack
+        finally:
+            probe.destroy_client(client)
     request_yaml = f"{{name: '{component_name}', connection: {str(bool(connected)).lower()}}}"
     result = subprocess.run(
         ["ros2", "service", "call", "/EffectorRegister",

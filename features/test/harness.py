@@ -137,6 +137,26 @@ def nodes_online(*node_names, timeout_s=10.0):
     avoids treating a just-started plain node as unavailable merely because a
     single ``ros2 node list`` query arrived before its discovery update.
     """
+    if os.environ.get("BSN_TRACE_DIRECT_READINESS") == "1":
+        import rclpy
+        from rclpy.context import Context
+        from rclpy.node import Node
+        context = Context()
+        rclpy.init(args=[], context=context)
+        probe = Node("bdd_outer_graph_probe", context=context)
+        deadline = time.monotonic() + timeout_s
+        pending = set(node_names)
+        try:
+            while pending and time.monotonic() < deadline:
+                observed = {ns.rstrip("/") + "/" + name
+                            for name, ns in probe.get_node_names_and_namespaces()}
+                pending = {name for name in pending if "/" + name.strip("/") not in observed}
+                if pending:
+                    time.sleep(0.1)
+            return pending
+        finally:
+            probe.destroy_node()
+            context.shutdown()
     pending = set(node_names)
     deadline = time.monotonic() + timeout_s
     while pending and time.monotonic() < deadline:
