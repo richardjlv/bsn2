@@ -234,6 +234,16 @@ def pytest_configure(config):
 def bsn_system():
     """Verifies the system under test is already running and active; launching and tearing it down
     is the harness's job (see this module's docstring)."""
+    if os.environ.get("BSN_TRACE_DIRECT_READINESS") == "1":
+        # Use the same active-state service probe as the outer launch harness.
+        # Repeated instrumented CLI startups can each exhaust their 5s budget.
+        sys.path.insert(0, os.path.join(FEATURES_DIR, "test"))
+        from harness import wait_for_lifecycle_active
+        pending = wait_for_lifecycle_active(LIFECYCLE_NODES, STARTUP_TIMEOUT_S)
+        if pending:
+            pytest.exit(f"Nodes never reached 'active': {pending}", returncode=1)
+        yield
+        return
     # Poll for 'active' instead of a blind sleep - usually faster, and gives
     # a precise, actionable failure if nothing was launched at all.
     deadline = time.time() + STARTUP_TIMEOUT_S

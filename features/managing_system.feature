@@ -42,8 +42,8 @@ Feature: Managing system adapts sensor sampling rate in response to reliability 
 
   @timing @g4-g5
   # Rastreabilidade BDD19: BSN-C10. Critério temporal local; G4/G5 local.
-  # Executar antes do cenário longo de recuperação: a mesma pilha ROS é compartilhada
-  # e aquele ensaio pode levar o oxímetro ao limite de 40 Hz, impedindo novos comandos.
+  # O executor inicia uma pilha nova para cada cenário de adaptação;
+  # a ordem textual não deve propagar o estado deixado pelo ensaio de recuperação.
   Scenario: An adaptation command is issued within 10 seconds after reliability degradation (G4/G5)
     Given the oximeter is operating normally with stable reliability
     When the oximeter repeatedly reports a 'fail' status

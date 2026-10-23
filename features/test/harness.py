@@ -178,21 +178,21 @@ def wait_for_topic_subscribers(topic_names, timeout_s=30.0):
     return pending
 
 
-def run_bdd_steps(relative_test_path):
+def run_bdd_steps(relative_test_path, *, pytest_args=(), report_suffix=""):
     """Run one steps/test_*.py file as a `pytest` subprocess and return the CompletedProcess
     (stdout/stderr inherited, so step failures show up directly in this test's output)."""
     env = dict(os.environ)
     # colcon's `--pytest-args` sets PYTEST_ADDOPTS on the outer pytest; left in place it leaks into this
     # inner run and is applied relative to the wrong cwd (e.g. collecting a path that doesn't exist here).
     env.pop("PYTEST_ADDOPTS", None)
-    command = [sys.executable, "-m", "pytest", "-v", relative_test_path]
+    command = [sys.executable, "-m", "pytest", "-v", relative_test_path, *pytest_args]
     # Um diretório novo por campanha evita confundir resultados antigos com os
     # cenários internos desta execução. Sem a variável, preserva o uso habitual.
     results_dir = env.get("BSN_BDD_RESULTS_DIR")
     if results_dir:
         destination = Path(results_dir).resolve()
         destination.mkdir(parents=True, exist_ok=True)
-        report = destination / (Path(relative_test_path).stem + ".xml")
+        report = destination / (Path(relative_test_path).stem + report_suffix + ".xml")
         command.extend(["--junitxml=" + str(report), "-rA"])
     if env.get("BSN_COVERAGE_CAMPAIGN"):
         # A coleta multiprocesso é iniciada pelo sitecustomize da campanha.

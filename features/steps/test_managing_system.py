@@ -314,8 +314,16 @@ def adaptation_log():
     """One persistent subscriber for every G4/G5 scenario (see _AdaptationCommandLog); module-scoped
     so rclpy.init()/shutdown() happens once per pytest subprocess."""
     log = _AdaptationCommandLog(reconfigure_topic("the oximeter"))
-    yield log
-    log.shutdown()
+    try:
+        # A fresh controller has a 60-cycle startup period. Readiness is outside
+        # the scenario response budget, and must be evidenced by an actual
+        # command rather than inferred from graph presence or a fixed sleep.
+        first = log.wait_for_any(0, timeout=90.0)
+        assert first is not None, "Controller never produced an initial oximeter command (90s readiness)"
+        print(f"Controller ready: first observed oximeter command {first:.3f} Hz", flush=True)
+        yield log
+    finally:
+        log.shutdown()
 
 
 class _PersistLog:
