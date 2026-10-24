@@ -90,6 +90,17 @@ def _node_info(node_name):
     return get_rosnode_info_ros2(result.stdout.decode("utf-8").splitlines())
 
 
+def _has_endpoint(node_name, kind, topic, timeout_s=5.0):
+    """Allow DDS endpoint discovery, preserving the required topic and direction."""
+    deadline = time.monotonic() + timeout_s
+    while True:
+        if any(endpoint["topic"] == topic for endpoint in _node_info(node_name)[kind]):
+            return True
+        if time.monotonic() >= deadline:
+            return False
+        time.sleep(0.1)
+
+
 # ---------------------------------------------------------------------------
 # Scenario "The system log receives each topic collected by the log collector".
 # ---------------------------------------------------------------------------
@@ -105,13 +116,11 @@ def system_log_subscribes_to_collector_topic(topic):
     # test_target_system.py's _assert_wired for the same reasoning.
     collector_topic = CHANNEL_TOPICS[topic]
 
-    collector_info = _node_info(LOG_COLLECTOR_NODE)
-    assert any(pub["topic"] == collector_topic for pub in collector_info["publishers"]), (
+    assert _has_endpoint(LOG_COLLECTOR_NODE, "publishers", collector_topic), (
         f"{LOG_COLLECTOR_NODE} does not publish {collector_topic}"
     )
 
-    logger_info = _node_info(LOGGER_NODE)
-    assert any(sub["topic"] == collector_topic for sub in logger_info["subscribers"]), (
+    assert _has_endpoint(LOGGER_NODE, "subscribers", collector_topic), (
         f"{LOGGER_NODE} does not subscribe to {collector_topic}"
     )
 
@@ -130,12 +139,10 @@ def adaptation_enactor_running():
 @then(parsers.parse('{component} should subscribe to "{channel}" published by {publisher}'))
 def component_subscribes_to_channel(component, channel, publisher):
     topic = CHANNEL_TOPICS[channel]
-    publisher_info = _node_info(COMPONENT_NODES[publisher])
-    assert any(pub["topic"] == topic for pub in publisher_info["publishers"]), (
+    assert _has_endpoint(COMPONENT_NODES[publisher], "publishers", topic), (
         f"{COMPONENT_NODES[publisher]} does not publish {topic}"
     )
-    component_info = _node_info(COMPONENT_NODES[component])
-    assert any(sub["topic"] == topic for sub in component_info["subscribers"]), (
+    assert _has_endpoint(COMPONENT_NODES[component], "subscribers", topic), (
         f"{COMPONENT_NODES[component]} does not subscribe to {topic}"
     )
 
@@ -143,12 +150,10 @@ def component_subscribes_to_channel(component, channel, publisher):
 @then(parsers.parse('{component} should publish "{channel}" to {target}'))
 def component_publishes_channel_to(component, channel, target):
     topic = CHANNEL_TOPICS[channel]
-    component_info = _node_info(COMPONENT_NODES[component])
-    assert any(pub["topic"] == topic for pub in component_info["publishers"]), (
+    assert _has_endpoint(COMPONENT_NODES[component], "publishers", topic), (
         f"{COMPONENT_NODES[component]} does not publish {topic}"
     )
-    target_info = _node_info(COMPONENT_NODES[target])
-    assert any(sub["topic"] == topic for sub in target_info["subscribers"]), (
+    assert _has_endpoint(COMPONENT_NODES[target], "subscribers", topic), (
         f"{COMPONENT_NODES[target]} does not subscribe to {topic}"
     )
 
