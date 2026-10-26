@@ -1,3 +1,6 @@
+# Oracle revision 2026-10-26: observed thermometer activity; valid and varying
+# health percentages (positive), no health output (negative). This does not
+# yet establish causal association with an individual thermometer reading.
 # Propriedades e resultados: src/tg/apendices/apendice_b_propriedades_bdd.md
 Feature: Patient Health Status (BSN-P10)
 
@@ -10,7 +13,7 @@ Feature: Patient Health Status (BSN-P10)
 	Scenario: A patient health status is available after a sensor reports a reading (BSN-P10)
 		Given the patient is being monitored by the thermometer
 		When the thermometer reports a new vital sign reading
-		Then a patient health status derived from that reading should be available
+		Then valid and varying patient health status values should be observed
 
 	# D-healthstatus-01: worded differently from the happy-path When on purpose.
 	# With the hub unable to process readings, /target_system_data never
@@ -24,4 +27,4 @@ Feature: Patient Health Status (BSN-P10)
 	Scenario: No patient health status is produced when the central hub cannot process a reading (BSN-P10)
 		Given the central hub is unable to process incoming readings
 		When the thermometer reports a reading
-		Then no new patient health status should be produced for that reading
+		Then no patient health status should be observed while thermometer readings continue

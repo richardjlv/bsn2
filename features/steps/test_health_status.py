@@ -16,7 +16,7 @@ from conftest import TARGET_SYSTEM_TOPIC, _kill_central_hub  # noqa: E402
 FEATURES_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 sys.path.insert(0, os.path.join(FEATURES_DIR, "steps"))
 
-from utils.asserts import is_valid_percentage  # noqa: E402
+from health_status_oracle import assert_health_observation  # noqa: E402
 from utils.parsers import capture_topic_data_with_timeout  # noqa: E402
 
 THERMOMETER_TOPIC = "/sensor_data/thermometer"
@@ -44,29 +44,16 @@ def thermometer_reports_reading_bounded(bdd):
     capture_topic_data_with_timeout(bdd, [THERMOMETER_TOPIC, TARGET_SYSTEM_TOPIC], timeout=5.0)
 
 
-@then("a patient health status derived from that reading should be available")
+@then("valid and varying patient health status values should be observed")
 def patient_health_status_available(bdd):
-    target_data = bdd.topic_data.get(TARGET_SYSTEM_TOPIC, {})
-    assert is_valid_percentage(target_data.get("patient_status")), (
-        f"No valid patient health status was reported by the central hub: "
-        f"{target_data.get('patient_status')}"
-    )
+    assert_health_observation(
+        bdd.topic_data[THERMOMETER_TOPIC].get("sensor_datapoint", []),
+        bdd.topic_data[TARGET_SYSTEM_TOPIC].get("patient_status", []))
 
 
-@then("no new patient health status should be produced for that reading")
+@then("no patient health status should be observed while thermometer readings continue")
 def no_new_health_status_produced(bdd):
-    # Direct indexing, not .get(..., {}): a missing key means the capture
-    # thread raised (utils/parsers.py's capture_topic_data_with_timeout
-    # swallows exceptions) and must fail loudly, not be mistaken for "the
-    # hub produced nothing" - see test_check_bsn.py's identical-shaped steps.
-    thermometer_data = bdd.topic_data[THERMOMETER_TOPIC]
-    assert any(thermometer_data.values()), (
-        f"No thermometer reading was captured during the window, so this "
-        f"scenario proved nothing either way: {thermometer_data}"
-    )
-
-    target_data = bdd.topic_data[TARGET_SYSTEM_TOPIC]
-    assert not target_data.get("patient_status"), (
-        f"Expected no patient health status while the central hub cannot "
-        f"process readings, but captured: {target_data.get('patient_status')}"
-    )
+    assert_health_observation(
+        bdd.topic_data[THERMOMETER_TOPIC].get("sensor_datapoint", []),
+        bdd.topic_data[TARGET_SYSTEM_TOPIC].get("patient_status", []),
+        expect_output=False)
