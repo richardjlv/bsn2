@@ -114,21 +114,39 @@ def deactivate_node(node_name):
         return False
 
 
-def get_message_attributes(topic_name):
-    """Dynamically get the attributes of a ROS2 message type."""
-    # Convert 'format_data/msg/Data' to 'format_data.msg.Data'
-    result = subprocess.run(
-        ["ros2", "topic", "type", topic_name],
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        timeout=5,
-    )
-    if result.returncode != 0:
-        #raise Exception(f"Error getting topic info: {result.stderr.decode('utf-8')}")
-        print(f"Error getting topic info: {result.stderr.decode('utf-8')}")
-        return {}
+# Interface contracts used by health_status. Explicit types also allow an
+# observer to subscribe while the publisher is deliberately unavailable.
+KNOWN_TOPIC_TYPES = {
+    "/sensor_data/thermometer": "bsn_interfaces/msg/SensorData",
+    "/target_system_data": "bsn_interfaces/msg/TargetSystemData",
+    "/persist": "bsn_interfaces/msg/Persist",
+}
 
-    message_type = result.stdout.decode("utf-8").strip()
+
+def _topic_echo_command(topic, filter_expr=None):
+    cmd = ["ros2", "topic", "echo", "--csv"]
+    if filter_expr:
+        cmd += ["--filter", filter_expr]
+    cmd.append(topic)
+    if topic in KNOWN_TOPIC_TYPES:
+        cmd.append(KNOWN_TOPIC_TYPES[topic])
+    return cmd
+
+
+def get_message_attributes(topic_name):
+    """Use declared BSN interfaces; discover types only for other topics."""
+    message_type = KNOWN_TOPIC_TYPES.get(topic_name)
+    if message_type is None:
+        result = subprocess.run(
+            ["ros2", "topic", "type", topic_name],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            timeout=30,
+        )
+        if result.returncode != 0:
+            raise RuntimeError("Cannot discover type of %s: %s" % (
+                topic_name, result.stderr.decode("utf-8")))
+        message_type = result.stdout.decode("utf-8").strip()
 
     module_name = message_type.replace("/", ".")
     class_name = module_name.split(".")[-1]  # Extract the last part as the class name
@@ -187,10 +205,7 @@ def capture_csv_data(topic, line_limit=10, timeout=15.0, filter_expr=None):
     
     output = {key[1:]: [] for key in message_keys}
 
-    cmd = ["ros2", "topic", "echo", "--csv"]
-    if filter_expr:
-        cmd += ["--filter", filter_expr]
-    cmd.append(topic)
+    cmd = _topic_echo_command(topic, filter_expr)
     process = subprocess.Popen(
         cmd,
         stdout=subprocess.PIPE,
@@ -293,10 +308,7 @@ def capture_csv_data_with_timeout(topic, timeout=3.0, filter_expr=None):
     message_keys = get_message_attributes(topic)
     output = {key[1:]: [] for key in message_keys}
 
-    cmd = ["ros2", "topic", "echo", "--csv"]
-    if filter_expr:
-        cmd += ["--filter", filter_expr]
-    cmd.append(topic)
+    cmd = _topic_echo_command(topic, filter_expr)
     process = subprocess.Popen(
         cmd,
         stdout=subprocess.PIPE,

@@ -108,7 +108,8 @@ def _kill_central_hub():
         ["pkill", "-9", "-f", "emergency_detection"],
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
-        timeout=5,
+        # Infrastructure budget; does not change the observation window or oracle.
+        timeout=30,
     )
 
     # `ros2 node list` won't do here: DDS discovery doesn't notice a killed
