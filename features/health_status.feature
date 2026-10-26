@@ -1,3 +1,4 @@
+# Propriedades e resultados: src/tg/apendices/apendice_b_propriedades_bdd.md
 Feature: Patient Health Status (BSN-P10)
 
 	A patient health status is available whenever a sensor reports a reading,
@@ -5,6 +6,7 @@ Feature: Patient Health Status (BSN-P10)
 	incoming readings.
 
 	@behavior @bsn-p10
+	# Rastreabilidade BDD08: BSN-P10. Retomada de P10.
 	Scenario: A patient health status is available after a sensor reports a reading (BSN-P10)
 		Given the patient is being monitored by the thermometer
 		When the thermometer reports a new vital sign reading
@@ -18,6 +20,7 @@ Feature: Patient Health Status (BSN-P10)
 	# sensor and the thermometer report new vital sign readings" for the same
 	# reasoning).
 	@behavior @sad-path @bsn-p10
+	# Rastreabilidade BDD09: BSN-C04. Variante local de indisponibilidade, relacionada a P10.
 	Scenario: No patient health status is produced when the central hub cannot process a reading (BSN-P10)
 		Given the central hub is unable to process incoming readings
 		When the thermometer reports a reading
