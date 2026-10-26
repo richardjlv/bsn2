@@ -61,7 +61,7 @@ class SystemMonitor(Node):
         ```
     """
 
-    def __init__(self, node_name: str, parameters= None):
+    def __init__(self, node_name: str = "node_monitor", parameters= None):
         # initialize LifecycleNode
         super().__init__(node_name, parameter_overrides=parameters or [])
         self.get_logger().info("Starting Combined System Monitor")
@@ -260,7 +260,25 @@ class SystemMonitor(Node):
         self.get_logger().debug(f"Energy update from {node_name}: {msg.content}")
 
     def check_state_helper(self, node_name):
-        return self.state_clients[node_name].call_async(GetState)
+        """Last known lifecycle state of `node_name`, from the events this
+        monitor already tracks.
+
+        Deliberately does not call the node's `get_state` service:
+        `check_heartbeats` runs inside a timer callback on this node's own
+        executor, so waiting on a service response there would deadlock, and
+        the previous `call_async(GetState)` both passed the service *class*
+        where rclpy wants a request instance (raising `TypeError` out of the
+        callback and unwinding the whole spin thread, which silently stopped
+        the collect_event -> log_event relay) and returned a Future that could
+        never compare equal to a state constant.
+        """
+        info = self.monitored_nodes.get(node_name)
+        if info is None:
+            return State.PRIMARY_STATE_UNKNOWN
+        return (
+            State.PRIMARY_STATE_ACTIVE if info.get('active')
+            else State.PRIMARY_STATE_INACTIVE
+        )
 
     def check_heartbeats(self):
         """
@@ -274,14 +292,14 @@ class SystemMonitor(Node):
         
         for node_name, info in self.monitored_nodes.items():
             time_since_last = current_time - info['last_heartbeat']
+            if time_since_last <= self.heartbeat_timeout:
+                continue
 
-            if self.check_state_helper(node_name) != State.PRIMARY_STATE_ACTIVE:
-                # Only log warning if node should be active
-                if time_since_last > self.heartbeat_timeout:
-                    if info['active']:
-                        self.get_logger().warn(f"Node {node_name} hasn't sent a heartbeat in {time_since_last:.1f} seconds!")
-                    elif self.debug:
-                        self.get_logger().debug(f"Inactive node {node_name} silent for {time_since_last:.1f}s")
+            # Only log warning if node should be active
+            if self.check_state_helper(node_name) == State.PRIMARY_STATE_ACTIVE:
+                self.get_logger().warn(f"Node {node_name} hasn't sent a heartbeat in {time_since_last:.1f} seconds!")
+            elif self.debug:
+                self.get_logger().debug(f"Inactive node {node_name} silent for {time_since_last:.1f}s")
 
     def publish_monitor_status(self):
         """

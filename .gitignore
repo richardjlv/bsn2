@@ -53,6 +53,7 @@ qtcreator-*
 CATKIN_IGNORE
 
 # Unit test / coverage reports
+coverage_runs/
 htmlcov/
 .tox/
 .nox/

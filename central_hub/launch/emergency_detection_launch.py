@@ -145,14 +145,14 @@ def generate_launch_description():
                 emulate_tty=True,
                 parameters=[config_monitor]
             ),
-            # launch_ros.actions.Node(
-                # package='adaptation',
-                # executable='enactor',
-                # name='enactor',
-                # output='screen',
-                # emulate_tty=True,
-                #parameters=[config_enactor]
-            # ),
+            launch_ros.actions.Node(
+                package='adaptation',
+                executable='enactor',
+                name='enactor',
+                output='screen',
+                emulate_tty=True,
+                parameters=[config_enactor] if os.path.exists(config_enactor) else [],
+            ),
             launch_ros.actions.Node(
                 package='adaptation',
                 executable='data_access',

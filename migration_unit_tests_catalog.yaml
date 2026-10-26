@@ -1,0 +1,236 @@
+suite_name: "BSN - Target System Component - Unit Tests"
+source_project: "ROS1 (catkin/rostest/pytest)"
+migration_target: "ROS2"
+generated_on: "2026-02-22"
+scope:
+  included_from_attachments:
+    - "test/unit/test_G3T1_1.py"
+    - "test/unit/test_G3T1_2.py"
+    - "test/unit/test_G3T1_3.py"
+    - "test/unit/test_G3T1_4.py"
+    - "test/unit/test_G3T1_5.py"
+    - "test/unit/test_G3T1_6.py"
+    - "test/unit/test_G3T1_1_connected.py"
+    - "test/unit/test_G3T1_2_connected.py"
+    - "test/unit/test_G3T1_3_connected.py"
+    - "test/unit/test_G3T1_4_connected.py"
+    - "test/unit/test_G3T1_5_connected.py"
+    - "test/unit/test_G3T1_6_connected.py"
+    - "test/unit/test_G4T1.py (summarized)"
+  cmake_launch_entries:
+    - "test/unit/test_G3T1_1.launch"
+    - "test/unit/test_G3T1_2.launch"
+    - "test/unit/test_G3T1_3.launch"
+    - "test/unit/test_G3T1_4.launch"
+    - "test/unit/test_G3T1_5.launch"
+    - "test/unit/test_G3T1_6.launch"
+    - "test/unit/test_G3T1_1_connected.launch"
+    - "test/unit/test_G3T1_2_connected.launch"
+    - "test/unit/test_G3T1_3_connected.launch"
+    - "test/unit/test_G3T1_4_connected.launch"
+    - "test/unit/test_G3T1_5_connected.launch"
+    - "test/unit/test_G3T1_6_connected.launch"
+    - "test/unit/test_G4T1.launch"
+
+shared_base:
+  file: "test/test_sensor.py"
+  class: "SharedSensorTests"
+  default_behavior:
+    - "Assina tópico do sensor e espera mensagens SensorData."
+    - "Mocka serviço de paciente para cenários de risco."
+    - "Valida risco baixo/médio/alto, out-of-range e unknown."
+    - "Valida comportamento de bateria e cenários de acurácia/status."
+  common_test_titles:
+    - "test_transfer_with_low_risk_data"
+    - "test_transfer_with_high_risk_data"
+    - "test_transfer_with_mid_risk_data"
+    - "test_transfer_with_out_of_range_data"
+    - "test_transfer_with_unknown_data"
+    - "test_transfer_with_accuracy_fail"
+    - "test_battery_consumption"
+
+unit_tests:
+  - id: "G3T1_1"
+    file: "test/unit/test_G3T1_1.py"
+    class: "TestG3T1_1"
+    title: "Test suite for G3T1_1 sensor"
+    topic: "oximeter_data"
+    vital_sign: "oxigenation"
+    inherited_from_shared: true
+    expected_cases:
+      - "Baixo risco"
+      - "Médio risco"
+      - "Alto risco"
+      - "Out of range"
+      - "Unknown data"
+      - "Falha de acurácia"
+      - "Consumo de bateria"
+
+  - id: "G3T1_2"
+    file: "test/unit/test_G3T1_2.py"
+    class: "TestG3T1_2"
+    title: "Test suite for G3T1_2 sensor"
+    topic: "ecg_data"
+    vital_sign: "heart_rate"
+    inherited_from_shared: true
+    expected_cases:
+      - "Baixo risco"
+      - "Médio risco"
+      - "Alto risco"
+      - "Out of range"
+      - "Unknown data"
+      - "Falha de acurácia"
+      - "Consumo de bateria"
+
+  - id: "G3T1_3"
+    file: "test/unit/test_G3T1_3.py"
+    class: "TestG3T1_3"
+    title: "Test suite for G3T1_3 sensor"
+    topic: "thermometer_data"
+    vital_sign: "temperature"
+    inherited_from_shared: true
+    expected_cases:
+      - "Baixo risco"
+      - "Médio risco"
+      - "Alto risco"
+      - "Out of range"
+      - "Unknown data"
+      - "Falha de acurácia"
+      - "Consumo de bateria"
+
+  - id: "G3T1_4"
+    file: "test/unit/test_G3T1_4.py"
+    class: "TestG3T1_4"
+    title: "Test suite for G3T1_4 sensor"
+    topic: "abps_data"
+    vital_sign: "abps"
+    inherited_from_shared: true
+    expected_cases:
+      - "Baixo risco"
+      - "Médio risco"
+      - "Alto risco"
+      - "Out of range"
+      - "Unknown data"
+      - "Falha de acurácia"
+      - "Consumo de bateria"
+
+  - id: "G3T1_5"
+    file: "test/unit/test_G3T1_5.py"
+    class: "TestG3T1_5"
+    title: "Test suite for G3T1_5 sensor"
+    topic: "abpd_data"
+    vital_sign: "abpd"
+    inherited_from_shared: true
+    expected_cases:
+      - "Baixo risco"
+      - "Médio risco"
+      - "Alto risco"
+      - "Out of range"
+      - "Unknown data"
+      - "Falha de acurácia"
+      - "Consumo de bateria"
+
+  - id: "G3T1_6"
+    file: "test/unit/test_G3T1_6.py"
+    class: "TestG3T1_6"
+    title: "Test suite for G3T1_6 sensor"
+    topic: "glucosemeter_data"
+    vital_sign: "glucose"
+    inherited_from_shared: true
+    expected_cases:
+      - "Baixo risco"
+      - "Médio risco"
+      - "Alto risco"
+      - "Out of range"
+      - "Unknown data"
+      - "Falha de acurácia"
+      - "Consumo de bateria"
+
+connected_sensor_unit_tests:
+  - id: "G3T1_1_connected"
+    file: "test/unit/test_G3T1_1_connected.py"
+    class: "TestG3T1_1ConnectedSensor"
+    title: "Tests for G3T1_1 when connected to a real sensor (spo2 service)."
+    topic: "oximeter_data"
+    service_mocked: "spo2 (std_srvs/SetBool)"
+    explicit_test_titles:
+      - "test_collect_uses_spo2_service_value"
+      - "test_collect_handles_spo2_service_failure"
+
+  - id: "G3T1_2_connected"
+    file: "test/unit/test_G3T1_2_connected.py"
+    class: "TestG3T1_2ConnectedSensor"
+    title: "Tests for G3T1_2 when connected to a real sensor (spo2 service)."
+    topic: "ecg_data"
+    service_mocked: "spo2 (std_srvs/SetBool)"
+    explicit_test_titles:
+      - "test_collect_handles_spo2_service_failure"
+
+  - id: "G3T1_3_connected"
+    file: "test/unit/test_G3T1_3_connected.py"
+    class: "TestG3T1_3ConnectedSensor"
+    title: "Tests for G3T1_3 when connected to a real sensor (spo2 service)."
+    topic: "thermometer_data"
+    service_mocked: "spo2 (std_srvs/SetBool)"
+    explicit_test_titles:
+      - "test_collect_handles_spo2_service_failure"
+
+  - id: "G3T1_4_connected"
+    file: "test/unit/test_G3T1_4_connected.py"
+    class: "TestG3T1_4ConnectedSensor"
+    title: "Tests for G3T1_4 when connected to a real sensor (spo2 service)."
+    topic: "abps_data"
+    service_mocked: "spo2 (std_srvs/SetBool)"
+    explicit_test_titles:
+      - "test_collect_handles_spo2_service_failure"
+
+  - id: "G3T1_5_connected"
+    file: "test/unit/test_G3T1_5_connected.py"
+    class: "TestG3T1_5ConnectedSensor"
+    title: "Tests for G3T1_5 when connected to a real sensor (spo2 service)."
+    topic: "abpd_data"
+    service_mocked: "spo2 (std_srvs/SetBool)"
+    explicit_test_titles:
+      - "test_collect_handles_spo2_service_failure"
+
+  - id: "G3T1_6_connected"
+    file: "test/unit/test_G3T1_6_connected.py"
+    class: "TestG3T1_6ConnectedSensor"
+    title: "Tests for G3T1_6 when connected to a real sensor (spo2 service)."
+    topic: "glucosemeter_data"
+    service_mocked: "spo2 (std_srvs/SetBool)"
+    explicit_test_titles:
+      - "test_collect_handles_spo2_service_failure"
+
+central_hub_unit_tests:
+  - id: "G4T1"
+    file: "test/unit/test_G4T1.py"
+    class: "TestG4T1"
+    title: "Test suite for G4T1 Central Hub component"
+    topic_under_test: "/TargetSystemData"
+    key_explicit_test_titles:
+      - "test_collect_thermometer_data"
+      - "test_transfer_very_low_risk_patient"
+      - "test_transfer_low_risk_patient"
+      - "test_transfer_moderate_risk_patient"
+      - "test_transfer_critical_risk_patient"
+      - "test_transfer_very_critical_risk_patient"
+      - "test_transfer_mixed_risk_levels"
+      - "test_transfer_all_sensor_data_fields"
+      - "test_collect_zero_risk_data"
+      - "test_collect_maximum_risk_data"
+      - "test_collect_low_battery_data"
+      - "test_sequential_sensor_updates"
+
+migration_notes_for_ros2_agent:
+  - "Trocar rospy -> rclpy."
+  - "Trocar rosservice/SetBool ROS1 por serviço equivalente ROS2 (mesmo .srv, adaptando client/server API)."
+  - "Trocar roslaunch/rostest por launch_testing + pytest."
+  - "Recriar fixtures de mock de serviço (patient_data e spo2) usando nós de teste ROS2."
+  - "Manter mapeamento de tópicos e regras de risco exatamente iguais para regressão funcional."
+  - "Validar timeouts e sincronização (ROS2 executor pode exigir spin/thread dedicados)."
+
+gaps_or_attention_points:
+  - "Nos testes *_connected, a descrição fala 'real sensor (spo2 service)' mesmo para sensores não-oxímetro; revisar se isso é intencional."
+  - "Em G3T1_2..G3T1_6 connected, só há teste explícito de falha de serviço; considerar adicionar caso de sucesso também."
+  - "test_G4T1.py foi recebido parcialmente (summarized), então o agente destino deve abrir arquivo completo para confirmar asserts finais."

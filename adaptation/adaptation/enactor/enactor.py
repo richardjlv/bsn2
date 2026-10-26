@@ -103,17 +103,14 @@ class Enactor(Node):
             durability=DurabilityPolicy.VOLATILE
         )
         
-        # Publishers (matching C++ original)
+        # Publishers (matching C++ original). The enactor's only
+        # AdaptationCommand publisher is log_adapt, as in ROS1's
+        # Controller.cpp:12 - logger.py persists each command and relays it
+        # to 'reconfigure' for delivery (Logger.cpp:39-47), so the system log
+        # is what sends reconfiguration requests to the parameter adapter
+        # (managing_system.feature). Publishing to 'reconfigure' here as well
+        # would deliver every command twice.
         self.adapt = self.create_publisher(
-            AdaptationCommand, 'reconfigure', qos_profile)
-
-        # Audit trail only - logger.py's log_adapt subscriber persists a
-        # record of every issued command, but does not relay it onward
-        # (delivery is this node's own direct publish to `reconfigure`,
-        # above; see Controller._send_adaptation_command for why both exist
-        # rather than routing through the relay - MANAGING_SYSTEM_GAPS.md
-        # finding #3).
-        self.log_adapt_pub = self.create_publisher(
             AdaptationCommand, 'log_adapt', qos_profile)
 
         self.except_pub = self.create_publisher(

@@ -190,33 +190,41 @@ class Controller(Enactor):
             self.invocations[component].clear()
     
     def _send_adaptation_command(self, component, action):
-        """Send adaptation command to component via reconfigure topic, and a
-        separate audit copy via log_adapt (see enactor.setup's log_adapt_pub
-        docstring for why this is a second publish, not a relay).
+        """Send adaptation command to component via log_adapt.
 
-        Both copies carry the same BSN-form target (e.g. "/g3t1_1") -
-        matching ROS1's Controller.cpp/Logger.cpp, where log_adapt's
-        AdaptationCommand *is* the one Logger relays onward unchanged, so
-        the persisted target and the delivered target were always the same
-        value. param_adapter.bsn_to_ros_mapping translates this form to the
-        real ROS2 node name on the delivery path; /persist keeps the BSN
-        form other adaptation records use (data_access.component_mapping is
-        keyed the same way for status/event lookups)."""
+        Matches ROS1's Controller.cpp/Logger.cpp: the logger persists this
+        AdaptationCommand and relays the same message onward to
+        'reconfigure', so the persisted target and the delivered target are
+        always the same BSN-form value (e.g. "/g3t1_1").
+        param_adapter.bsn_to_ros_mapping translates it to the real ROS2 node
+        name on the delivery path; /persist keeps the BSN form other
+        adaptation records use (data_access.component_mapping is keyed the
+        same way for status/event lookups)."""
         command = AdaptationCommand()
         command.source = self.get_name()
         command.target = component
         command.action = action
 
         self.adapt.publish(command)
-        self.log_adapt_pub.publish(command)
 
         self.get_logger().info(f"Sent adaptation to {component}: {action}")
     
     def _publish_exception(self, component, value):
-        """Publish an exception message"""
+        """Publish an exception message.
+
+        content must be "<component>=<value>" (matching ROS1's
+        Controller.cpp: content = component+"=1"/"=-1") - base_engine.py's
+        receive_exception() only updates self.priority inside its own
+        `if "=" in content:` branch, parsing exactly that format. The
+        previous human-readable sentence here never matched, so priority
+        never diverged between components, r_vec's ordering in plan() never
+        changed, and the same term (the hub) was permanently stuck as the
+        only one left adjustable - see MANAGING_SYSTEM_GAPS.md for the full
+        analysis, verified against a real ROS1 run.
+        """
         exception_msg = ExceptionMsg()
         exception_msg.source = self.get_name()
-        exception_msg.content = f"Component {component} has {value} exceptions"
+        exception_msg.content = f"{component}={value}"
         self.except_pub.publish(exception_msg)
         self.get_logger().warn(f'Published exception for {component}: {value}')
 

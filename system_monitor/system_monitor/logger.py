@@ -325,17 +325,14 @@ class Logger(LifecycleNode):
         # Publish to persist (for DataAccess)
         self.persist_pub.publish(persist_msg)
 
-        # No relay to 'reconfigure' here: the enactor already publishes
-        # directly to 'reconfigure' for delivery (Controller.
-        # _send_adaptation_command) and log_adapt is fed a separate audit
-        # copy purely for this persistence step. Relaying too would deliver
-        # every command twice (once via the enactor's direct publish, once
-        # via this relay reaching param_adapter a second time) - confirmed
-        # live before this was removed. self.reconfigure_pub stays declared
-        # so target_system.feature's topology check (logger publishes
-        # 'reconfigure') still holds; it is simply unused for delivery now.
+        # Relay to 'reconfigure' (for ParamAdapter). This is the delivery
+        # path, as in ROS1's Logger.cpp:39-47: the enactor publishes only to
+        # log_adapt, so the system log is what sends reconfiguration
+        # requests to the parameter adapter.
+        self.reconfigure_pub.publish(msg)
+
         self.get_logger().debug(
-            f"Logged adaptation: {msg.source} -> {msg.target}: {msg.action}")
+            f"Logged and routed adaptation: {msg.source} -> {msg.target}: {msg.action}")
     
     def receive_uncertainty(self, msg):
         """

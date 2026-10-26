@@ -192,23 +192,39 @@ class ParamAdapter(Node):
 
     def receive_adaptation_command(self, msg):
         """Process and route adaptation commands with name translation"""
-        
-        # Translate BSN component name to ROS2 node name. Both the mapping
-        # and _component_publishers are keyed with a leading slash, while a
-        # component identifying itself by `node.get_name()` has none, so
-        # normalize before looking up - otherwise a perfectly valid
-        # "oximeter_node" misses both tables and falls into the branch below.
+
+        # Translate BSN component name to ROS2 node name. bsn_to_ros_mapping
+        # and the publishers __init__ pre-creates for expected_components are
+        # both keyed with a leading slash, while a component identifying
+        # itself by `node.get_name()` has none, so normalize before looking
+        # up against the mapping - otherwise a perfectly valid
+        # "oximeter_node" misses it and falls into the branch below.
         original_target = msg.target
         lookup_target = original_target if original_target.startswith("/") else f"/{original_target}"
         translated_target = self.bsn_to_ros_mapping.get(lookup_target, lookup_target)
 
+        # _component_publishers itself is keyed inconsistently depending on
+        # how an entry was created: __init__'s pre-population uses a leading
+        # slash (matching translated_target above), but module_connect's real
+        # registration path stores the raw, slash-less name a component
+        # reports via node.get_name() - so a dynamically-registered component
+        # never matched translated_target here. Accept both forms rather
+        # than requiring the caller-facing convention to match internal
+        # bookkeeping that isn't actually consistent with itself.
         if translated_target in self._component_publishers:
+            publisher_key = translated_target
+        elif translated_target.lstrip("/") in self._component_publishers:
+            publisher_key = translated_target.lstrip("/")
+        else:
+            publisher_key = None
+
+        if publisher_key is not None:
             # Update message target to actual ROS2 node name
             msg.target = translated_target
-            
+
             # Forward to actual component
-            self._component_publishers[translated_target].publish(msg)
-            
+            self._component_publishers[publisher_key].publish(msg)
+
             self.get_logger().info(f"Routed adaptation: {original_target} → {translated_target}")
             self.get_logger().info(f"Command content: {msg.action}")
         else:
