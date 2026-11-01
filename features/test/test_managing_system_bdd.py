@@ -26,7 +26,6 @@ PLAIN_NODES = ("logger", "node_monitor", "enactor", "reli_engine", "data_access"
 GROUPS = {
     "topology": ("-m", "topology"),
     "increases": ("-k", "test_sampling_rate_increases"),
-    "increase_logging": ("-k", "test_a_sampling_rate_increase_is_recorded"),
     "recovers": ("-k", "test_sampling_rate_decreases"),
     "deadline": ("-k", "test_an_adaptation_command_is_issued_within_10_seconds"),
     "silent": ("-k", "test_no_adaptation_is_triggered"),

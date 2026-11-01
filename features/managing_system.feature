@@ -39,12 +39,7 @@ Feature: Managing system adapts sensor sampling rate in response to reliability 
     Given the managing system is monitoring the reliability of the oximeter
     When the oximeter repeatedly reports a 'fail' status
     Then an adaptation command increasing the sampling rate of the oximeter should be issued
-
-  @behavior @logging @g4-g5
-  Scenario: A sampling rate increase is recorded after reliability degradation (G4/G5)
-    Given the managing system is monitoring the reliability of the oximeter
-    When the oximeter repeatedly reports a 'fail' status
-    Then a record of an adaptation command increasing the sampling rate of the oximeter should reach the persistence channel
+    And a record of an adaptation command increasing the sampling rate of the oximeter should reach the persistence channel
 
 
   @timing @g4-g5
