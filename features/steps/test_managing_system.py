@@ -393,7 +393,7 @@ class _PersistLog:
         finally:
             self._node.destroy_publisher(publisher)
 
-    def wait_for_record(self, target, msg_type, since_index, timeout=10.0, source=None):
+    def wait_for_record(self, target, msg_type, since_index, timeout=10.0, source=None, min_frequency=None):
         """Mirrors ROS1's _wait_for_persist_record: the first record after `since_index` matching
         `target`/`msg_type` (and `source`, if given), polling instead of re-capturing a window. Pass `source`
         when the real /enactor's traffic for the same sensor could also match `target`."""
@@ -405,6 +405,16 @@ class _PersistLog:
                 if rec_target == target and rec_type == msg_type:
                     if source is not None and rec_source != source:
                         continue
+                    if min_frequency is not None:
+                        match = _FREQ_ACTION_RE.match(content)
+                        if match is None:
+                            continue
+                        try:
+                            frequency = float(match.group(1))
+                        except ValueError:
+                            continue
+                        if not min_frequency < frequency < float("inf"):
+                            continue
                     return (rec_source, rec_target, rec_type, content)
             time.sleep(0.05)
         return None
@@ -491,14 +501,15 @@ def sensor_operating_normally_stable(bdd, sensor, adaptation_log, persist_log):
 
 
 @when(parsers.parse("{sensor} repeatedly reports a 'fail' status"))
-def sensor_repeatedly_reports_fail_status(bdd, sensor):
+def sensor_repeatedly_reports_fail_status(bdd, sensor, persist_log):
+    bdd.persist_since_index = persist_log.since_index()
     bdd.degradation_start_time = time.time()
     bdd.fail_stream = _FailStatusStream(SENSORS[sensor]["node"])
     bdd.fail_stream.start()
 
 
 @then(parsers.parse("an adaptation command increasing the sampling rate of {sensor} should be issued"))
-def adaptation_command_increasing_rate_issued(bdd, sensor, adaptation_log, persist_log):
+def adaptation_command_increasing_rate_issued(bdd, sensor, adaptation_log):
     # Waits specifically for freq > baseline - discards any reduce-command
     # still in flight from a prior scenario's recovery - mirroring ROS1's
     # _wait_for_adaptation_command_above.
@@ -510,8 +521,21 @@ def adaptation_command_increasing_rate_issued(bdd, sensor, adaptation_log, persi
         f"{sensor} repeatedly reported 'fail' - see "
         f"../MANAGING_SYSTEM_GAPS.md's runtime-breakage section"
     )
-    _assert_adaptation_logged(bdd, sensor, persist_log)
 
+
+
+
+@then(parsers.parse("a record of an adaptation command increasing the sampling rate of {sensor} should reach the persistence channel"))
+def increase_recorded(bdd, sensor, persist_log):
+    try:
+        record = persist_log.wait_for_record(
+            target=SENSORS[sensor]["bsn"], msg_type="AdaptationCommand",
+            since_index=bdd.persist_since_index, timeout=30.0,
+            min_frequency=BASELINE_FREQUENCY_HZ,
+        )
+        assert record is not None, "No new increase-command record reached /persist"
+    finally:
+        bdd.fail_stream.stop()
 
 @then(parsers.parse("an adaptation command for {sensor} should be issued within {time_limit} seconds"))
 def adaptation_command_within_time_limit(bdd, sensor, time_limit, adaptation_log):
