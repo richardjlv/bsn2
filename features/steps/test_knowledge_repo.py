@@ -5,10 +5,11 @@ Assumes the system under test is already running - see conftest.py's module docs
 import os
 import subprocess
 import sys
+import time
 
 from pytest_bdd import given, parsers, scenario, then
 
-from conftest import _nodes_online  # noqa: E402
+from conftest import _direct_graph_node, _nodes_online  # noqa: E402
 
 FEATURES_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 sys.path.insert(0, os.path.join(FEATURES_DIR, "steps"))
@@ -25,15 +26,34 @@ def test_knowledge_repository_wired():
 
 
 def _node_info(node_name):
-    """ros2 node info for `node_name`, parsed into publishers/subscribers/services
-    (utils.parsers.get_rosnode_info_ros2). Duplicated across test_*.py files because each runs as its own
-    pytest subprocess."""
+    if os.environ.get("BSN_TRACE_DIRECT_READINESS") == "1":
+        _nodes_online(node_name)
+        graph = _direct_graph_node()
+        namespace, _, name = ("/" + node_name.strip("/")).rpartition("/")
+        namespace = namespace or "/"
+        return {
+            "publishers": [{"topic": topic} for topic, _ in
+                           graph.get_publisher_names_and_types_by_node(name, namespace)],
+            "subscribers": [{"topic": topic} for topic, _ in
+                            graph.get_subscriber_names_and_types_by_node(name, namespace)],
+        }
     result = subprocess.run(
         ["ros2", "node", "info", f"/{node_name}"],
         stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=5,
     )
     assert result.returncode == 0, f"Failed to get info for /{node_name}: {result.stderr.decode()}"
     return get_rosnode_info_ros2(result.stdout.decode("utf-8").splitlines())
+
+
+def _has_endpoint(node_name, kind, topic, timeout_s=5.0):
+    """Allow endpoint discovery without changing the topology contract."""
+    deadline = time.monotonic() + timeout_s
+    while True:
+        if any(endpoint["topic"] == topic for endpoint in _node_info(node_name)[kind]):
+            return True
+        if time.monotonic() >= deadline:
+            return False
+        time.sleep(0.1)
 
 
 @given("the knowledge repository is running")
@@ -46,11 +66,9 @@ def knowledge_repository_subscribes_to(channel, publisher):
     channel_topic = CHANNELS[channel]
     publisher_node = NODES[publisher]
 
-    publisher_info = _node_info(publisher_node)
-    assert any(pub["topic"] == channel_topic for pub in publisher_info["publishers"]), (
+    assert _has_endpoint(publisher_node, "publishers", channel_topic), (
         f"{publisher_node} does not publish {channel_topic}"
     )
-    repo_info = _node_info(KNOWLEDGE_REPO_NODE)
-    assert any(sub["topic"] == channel_topic for sub in repo_info["subscribers"]), (
+    assert _has_endpoint(KNOWLEDGE_REPO_NODE, "subscribers", channel_topic), (
         f"{KNOWLEDGE_REPO_NODE} does not subscribe to {channel_topic}"
     )
