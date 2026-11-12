@@ -370,7 +370,11 @@ def _high_risk_from_single_injection(bdd, ros_node):
             while time.time() < deadline:
                 rclpy.spin_once(ros_node, timeout_sec=0.02)
 
-            if any(m.trm_data == HIGH_RISK_TEMPERATURE for m in received):
+            if any(
+                m.trm_data == HIGH_RISK_TEMPERATURE
+                and m.header.stamp.sec + m.header.stamp.nanosec * 1e-9 >= send_time
+                for m in received
+            ):
                 break
             time.sleep(random.uniform(*INJECTION_BACKOFF_RANGE_S))
     finally:
@@ -397,21 +401,23 @@ def _high_risk_from_single_injection(bdd, ros_node):
 
 @then("the central hub should report an emergency within 250 ms of that reading")
 def hub_reports_emergency_in_time(bdd):
-    matches = [m for m in bdd.target_messages if m["trm_data"] == bdd.injected_datapoint]
+    matches = [
+        m for m in bdd.target_messages
+        if m["trm_data"] == bdd.injected_datapoint
+        and m["stamp"] >= bdd.injection_time
+    ]
     assert matches, (
         f"The central hub never echoed the injected high-risk reading "
         f"(trm_data={bdd.injected_datapoint}) on {TARGET_SYSTEM_TOPIC} within "
         f"{REACTION_WINDOW_S}s, across all {bdd.injection_attempts} injection "
-        f"attempts; observed trm_data values on the last attempt were: "
-        f"{[m['trm_data'] for m in bdd.target_messages]}. Every attempt being "
-        f"swallowed (rather than the usual ~20% one-off) points at the hub not "
-        f"consuming {THERMOMETER_TOPIC} at all, not at the real sensor "
-        f"overwriting the injection - check that central_hub_node is active "
-        f"and subscribed."
+        f"attempts; only outputs stamped at or after the injection are eligible. "
+        f"Observed (value, stamp): "
+        f"{[(m['trm_data'], m['stamp']) for m in bdd.target_messages]}. "
+        f"Injection timestamp: {bdd.injection_time}."
     )
 
     latency = min(m["stamp"] for m in matches) - bdd.injection_time
-    assert -0.01 <= latency <= EMERGENCY_BUDGET_S, (
+    assert 0.0 <= latency <= EMERGENCY_BUDGET_S, (
         f"Central hub took {latency * 1000:.1f} ms to reflect the high-risk "
         f"thermometer reading on {TARGET_SYSTEM_TOPIC} (budget: "
         f"{EMERGENCY_BUDGET_S * 1000:.0f} ms). central_hub_node only runs "
