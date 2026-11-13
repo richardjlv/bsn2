@@ -37,9 +37,11 @@ Feature: Managing system adapts sensor sampling rate in response to reliability 
   # Rastreabilidade BDD17: BSN-C08. Critério local de adaptação por confiabilidade; G4/G5 local.
   Scenario: Sampling rate increases when sensor reliability falls below the threshold (G4/G5)
     Given the managing system is monitoring the reliability of the oximeter
+    And the current publication rate of the oximeter is measured
     When the oximeter repeatedly reports a 'fail' status
     Then an adaptation command increasing the sampling rate of the oximeter should be issued
     And a record of an adaptation command increasing the sampling rate of the oximeter should reach the persistence channel
+    And the observed publication rate of the oximeter should increase
 
 
   @timing @g4-g5
@@ -57,6 +59,7 @@ Feature: Managing system adapts sensor sampling rate in response to reliability 
     Given the oximeter is operating at an elevated sampling rate
     When the reliability of the oximeter rises above the threshold
     Then an adaptation command reducing the sampling rate of the oximeter should be issued
+    And the observed publication rate of the oximeter should decrease
 
   @behavior @g4-g5 @xfail 
   # Razão técnica original: o controlador é um otimizador contínuo (kp=150, limites 0.1-40 Hz,

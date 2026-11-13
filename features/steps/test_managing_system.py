@@ -25,7 +25,9 @@ from utils.interface_map import (  # noqa: E402
 )
 from utils.parsers import get_rosnode_info_ros2  # noqa: E402
 
-from bsn_interfaces.msg import AdaptationCommand, Persist  # noqa: E402
+from sampling_rate_oracle import observe_rate, assert_rate_changed
+from utils.interface_map import sensor_topic
+from bsn_interfaces.msg import SensorData, AdaptationCommand, Persist  # noqa: E402
 
 FEATURE_FILE = os.path.join(FEATURES_DIR, "managing_system.feature")
 
@@ -514,7 +516,8 @@ def adaptation_command_increasing_rate_issued(bdd, sensor, adaptation_log):
     # still in flight from a prior scenario's recovery - mirroring ROS1's
     # _wait_for_adaptation_command_above.
     freq = adaptation_log.wait_for_above(BASELINE_FREQUENCY_HZ, bdd.since_index)
-    bdd.fail_stream.stop()
+    if freq is None:
+        bdd.fail_stream.stop()
     assert freq is not None, (
         f"No AdaptationCommand with freq > {BASELINE_FREQUENCY_HZ}Hz arrived "
         f"on {reconfigure_topic(sensor)} in {ADAPTATION_WAIT_S}s after "
@@ -534,8 +537,9 @@ def increase_recorded(bdd, sensor, persist_log):
             min_frequency=BASELINE_FREQUENCY_HZ,
         )
         assert record is not None, "No new increase-command record reached /persist"
-    finally:
+    except BaseException:
         bdd.fail_stream.stop()
+        raise
 
 @then(parsers.parse("an adaptation command for {sensor} should be issued within {time_limit} seconds"))
 def adaptation_command_within_time_limit(bdd, sensor, time_limit, adaptation_log):
@@ -561,9 +565,15 @@ def sensor_operating_at_elevated_rate(bdd, sensor, adaptation_log, persist_log):
     _nodes_online(RELIABILITY_ENGINE_NODE, ENACTOR_NODE, PARAM_ADAPTER_NODE)
     since = adaptation_log.since_index()
     stream = _FailStatusStream(SENSORS[sensor]["node"])
+    initial = _observe_sensor_rate(sensor)
     stream.start()
-    time.sleep(8.0)
-    stream.stop()
+    try:
+        time.sleep(8.0)
+        elevated = _observe_sensor_rate(sensor)
+        assert_rate_changed(initial, elevated, 'increase')
+        bdd.observed_elevated_rate = elevated
+    finally:
+        stream.stop()
 
     peak = adaptation_log.wait_for_peak_stable(since)
     assert peak is not None, (
@@ -686,3 +696,34 @@ def adaptation_recorded_despite_failure(bdd, sensor, persist_log):
         # cleanup in then_adaptation_recorded_despite_failure's finally.
         if getattr(bdd, "effector_disconnected", None) == sensor_node:
             _set_effector_connection(sensor_node, True)
+
+
+def _observe_sensor_rate(sensor):
+    node = Node('sampling_rate_observer')
+    try:
+        def subscribe(callback):
+            sub = node.create_subscription(SensorData, sensor_topic(sensor), callback, 200)
+            return lambda: node.destroy_subscription(sub)
+        return observe_rate(subscribe, lambda: rclpy.spin_once(node, timeout_sec=0.02), time.monotonic)
+    finally:
+        node.destroy_node()
+
+
+@given(parsers.parse('the current publication rate of {sensor} is measured'))
+def measure_initial_rate(bdd, sensor):
+    bdd.observed_initial_rate = _observe_sensor_rate(sensor)
+
+
+@then(parsers.parse('the observed publication rate of {sensor} should increase'))
+def assert_sensor_rate_increased(bdd, sensor):
+    try:
+        after = _observe_sensor_rate(sensor)
+        assert_rate_changed(bdd.observed_initial_rate, after, 'increase')
+    finally:
+        bdd.fail_stream.stop()
+
+
+@then(parsers.parse('the observed publication rate of {sensor} should decrease'))
+def assert_sensor_rate_decreased(bdd, sensor):
+    after = _observe_sensor_rate(sensor)
+    assert_rate_changed(bdd.observed_elevated_rate, after, 'decrease')
